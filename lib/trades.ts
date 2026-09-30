@@ -75,7 +75,7 @@ export function optimalLineup(
     ),
   );
   return {
-    total: -cost,
+    total: cost === 0 ? 0 : -cost,
     filled: flow,
     slots: expanded.length,
     players: selected,

@@ -13,7 +13,14 @@ import {
 import { League, Player, Team, WaiverPlayer, points } from '@/lib/types';
 import { compareWaiverMove } from '@/lib/waivers';
 import Avatar from './player-avatar';
-const positionOrder: Player['position'][] = ['QB', 'RB', 'WR', 'TE', 'K'];
+const positionOrder: Player['position'][] = [
+  'QB',
+  'RB',
+  'WR',
+  'TE',
+  'K',
+  'D/ST',
+];
 export default function WaiverPage({
   league,
   mine,

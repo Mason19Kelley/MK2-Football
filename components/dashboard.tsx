@@ -34,7 +34,8 @@ import {
 } from 'lucide-react';
 import Avatar from './player-avatar';
 import WaiverPage from './waiver-page';
-import { demoLeague } from '@/lib/demo';
+import PlayersPage from './players-page';
+import { demoLeague, restoreDemoDefenses } from '@/lib/demo';
 import {
   League,
   Player,
@@ -43,13 +44,21 @@ import {
   points,
   active,
   total,
-  removeDefensivePlayers,
+  removeIDPPlayers,
 } from '@/lib/types';
-import { applyTrade, optimalLineup } from '@/lib/trades';
+import {
+  evaluateRoster,
+  TradeHorizon,
+  horizonLabels,
+} from '@/lib/weekly-trades';
+import { planTrade, tradePickupCandidates } from '@/lib/trade-plans';
+import { TradeMoves } from './trade-moves';
+import { TradeWeeklyComparison } from './trade-weekly-comparison';
 import { applyProjections, parseProjectionCSV } from '@/lib/projections';
+import { TradeHistoryPanel } from './trade-history';
 import { TradeFinder } from './trade-finder';
 
-type View = 'roster' | 'league' | 'trade' | 'waivers';
+type View = 'roster' | 'league' | 'players' | 'trade' | 'waivers';
 type Modal = 'connect' | 'projections' | 'help' | null;
 const STORAGE = 'sunday-league-v1';
 function initials(name: string) {
@@ -167,6 +176,28 @@ export default function Dashboard() {
     [send, setSend] = useState<number[]>([]),
     [receive, setReceive] = useState<number[]>([]),
     [projectionError, setProjectionError] = useState('');
+  const [includeTradeHistory, setIncludeTradeHistory] = useState(true);
+  const [tradePickup, setTradePickup] = useState(false);
+  const [tradeHorizon, setTradeHorizon] = useState<TradeHorizon>('remaining');
+  const [playoffWeek, setPlayoffWeek] = useState('');
+  useEffect(() => {
+    setPlayoffWeek('');
+  }, [league.id, league.season]);
+  const tradeLeague = useMemo(
+    () =>
+      playoffWeek
+        ? {
+            ...league,
+            playoffStartWeek:
+              Number.isInteger(Number(playoffWeek)) &&
+              Number(playoffWeek) >= 1 &&
+              Number(playoffWeek) <= league.finalWeek
+                ? Number(playoffWeek)
+                : undefined,
+          }
+        : league,
+    [league, playoffWeek],
+  );
   useEffect(() => {
     try {
       const cached = localStorage.getItem(STORAGE);
@@ -181,8 +212,8 @@ export default function Dashboard() {
             data.league.waiverWire = demoLeague.waiverWire;
             data.original.waiverWire = demoLeague.waiverWire;
           }
-          setLeague(removeDefensivePlayers(data.league));
-          setOriginal(removeDefensivePlayers(data.original));
+          setLeague(restoreDemoDefenses(removeIDPPlayers(data.league)));
+          setOriginal(restoreDemoDefenses(removeIDPPlayers(data.original)));
           const id = data.league.teams.some((t: Team) => t.id === data.myTeamId)
             ? data.myTeamId
             : data.league.teams[0].id;
@@ -276,6 +307,7 @@ export default function Dashboard() {
     setViewedId(id);
     setSend([]);
     setReceive([]);
+    setTradePickup(false);
     setPartnerId(league.teams.find((t) => t.id !== id)?.id ?? id);
   }
   function clearCredentials() {
@@ -301,13 +333,14 @@ export default function Dashboard() {
         body: JSON.stringify({
           leagueId: leagueInput,
           season,
+          includeTradeHistory,
           espnS2: privateLeague ? s2 : '',
           swid: privateLeague ? swid : '',
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Import failed.');
-      const next = removeDefensivePlayers(data.league);
+      const next = removeIDPPlayers(data.league);
       const id =
         league.id === next.id && next.teams.some((t) => t.id === myTeamId)
           ? myTeamId
@@ -320,7 +353,9 @@ export default function Dashboard() {
       setSend([]);
       setReceive([]);
       setView(
-        view === 'waivers' && league.id === next.id ? 'waivers' : 'roster',
+        (view === 'waivers' || view === 'players') && league.id === next.id
+          ? view
+          : 'roster',
       );
       setModal(null);
       clearCredentials();
@@ -373,12 +408,97 @@ export default function Dashboard() {
       );
     }
   }
-  const trade = applyTrade(mine.players, partner.players, send, receive),
-    before = optimalLineup(mine.players, league.slots),
-    after = optimalLineup(trade.mine, league.slots),
-    partnerBefore = optimalLineup(partner.players, league.slots),
-    partnerAfter = optimalLineup(trade.theirs, league.slots);
+  const playoffValid =
+    Number.isInteger(tradeLeague.playoffStartWeek) &&
+    tradeLeague.playoffStartWeek! >= 1 &&
+    tradeLeague.playoffStartWeek! <= league.finalWeek;
+  const horizonError =
+    tradeHorizon === 'playoffs' && !playoffValid
+      ? 'Choose your league’s playoff start week.'
+      : tradeHorizon !== 'ros' && league.week > league.finalWeek
+        ? 'This season has no remaining weeks.'
+        : '';
+  const analysis = useMemo(() => {
+    const horizon = horizonError ? 'ros' : tradeHorizon;
+    const evaluate = (players: Player[]) =>
+      evaluateRoster(tradeLeague, players, horizon);
+    const before = evaluate(mine.players),
+      partnerBefore = evaluate(partner.players);
+    try {
+      const plan =
+        send.length && receive.length
+          ? planTrade(
+              tradeLeague,
+              mine.players,
+              partner.players,
+              send,
+              receive,
+              {
+                includePickup: tradePickup,
+                evaluate,
+                pickupCandidates: tradePickup
+                  ? tradePickupCandidates(tradeLeague, horizon)
+                  : [],
+              },
+            )
+          : null;
+      const after = evaluate(plan?.mine.roster ?? mine.players);
+      const partnerAfter = evaluate(plan?.partner.roster ?? partner.players);
+      return {
+        before,
+        partnerBefore,
+        after,
+        partnerAfter,
+        plan,
+        error: '',
+        tradeOnly: plan
+          ? {
+              mine:
+                evaluate(
+                  plan.mine.roster.filter((p) => p.id !== plan.mine.pickup?.id),
+                ).total - before.total,
+              partner:
+                evaluate(
+                  plan.partner.roster.filter(
+                    (p) => p.id !== plan.partner.pickup?.id,
+                  ),
+                ).total - partnerBefore.total,
+            }
+          : null,
+      };
+    } catch (err) {
+      return {
+        before,
+        partnerBefore,
+        after: before,
+        partnerAfter: partnerBefore,
+        plan: null,
+        error:
+          err instanceof Error ? err.message : 'Could not plan this trade.',
+        tradeOnly: null,
+      };
+    }
+  }, [
+    tradeLeague,
+    tradeHorizon,
+    horizonError,
+    mine,
+    partner,
+    send,
+    receive,
+    tradePickup,
+  ]);
+  const {
+    before,
+    after,
+    partnerBefore,
+    partnerAfter,
+    plan: tradePlan,
+  } = analysis;
+  const planError = analysis.error;
   const canAnalyze =
+    !planError &&
+    !horizonError &&
     send.length > 0 &&
     receive.length > 0 &&
     before.complete &&
@@ -424,6 +544,13 @@ export default function Dashboard() {
           >
             <Users size={19} />
             League rosters
+          </button>
+          <button
+            className={view === 'players' ? 'nav-item selected' : 'nav-item'}
+            onClick={() => navigate('players')}
+          >
+            <Activity size={19} />
+            Players
           </button>
           <button
             className={view === 'trade' ? 'nav-item selected' : 'nav-item'}
@@ -520,9 +647,11 @@ export default function Dashboard() {
                 ? 'Roster overview'
                 : view === 'league'
                   ? 'League rosters'
-                  : view === 'waivers'
-                    ? 'Waiver wire'
-                    : 'Trade lab'}
+                  : view === 'players'
+                    ? 'Players'
+                    : view === 'waivers'
+                      ? 'Waiver wire'
+                      : 'Trade lab'}
             </span>
           </div>
           <div className="topbar-actions">
@@ -553,18 +682,22 @@ export default function Dashboard() {
                     : 'Team roster'
                   : view === 'league'
                     ? 'The whole league.'
-                    : view === 'waivers'
-                      ? 'Find your next upgrade.'
-                      : 'Make your next move.'}
+                    : view === 'players'
+                      ? 'Players'
+                      : view === 'waivers'
+                        ? 'Find your next upgrade.'
+                        : 'Make your next move.'}
               </h1>
               <p>
                 {view === 'roster'
                   ? 'Your lineup, your depth, and the road ahead.'
                   : view === 'league'
                     ? 'Know the competition. Find your next opportunity.'
-                    : view === 'waivers'
-                      ? 'Available players, your roster, and a clearer next move.'
-                      : 'Explore what a trade could do for your starting lineup.'}
+                    : view === 'players'
+                      ? 'Browse players and compare their weekly and rest-of-season projections.'
+                      : view === 'waivers'
+                        ? 'Available players, your roster, and a clearer next move.'
+                        : 'Explore what a trade could do for your starting lineup.'}
               </p>
             </div>
             <button className="button primary" onClick={openConnect}>
@@ -1024,6 +1157,13 @@ export default function Dashboard() {
               />
             </>
           )}
+          {view === 'players' && (
+            <PlayersPage
+              key={`${league.source}-${league.id}`}
+              league={league}
+              onProjectionSettings={() => setModal('projections')}
+            />
+          )}
           {view === 'waivers' && (
             <WaiverPage
               key={`${league.source}-${league.id}-${myTeamId}`}
@@ -1040,10 +1180,10 @@ export default function Dashboard() {
                 <div>
                   <strong>A sandbox for your next move.</strong>
                   <p>
-                    Compare the best eligible starting lineup before and after a
-                    trade using ROS points. This is a season-total estimate;
-                    weekly byes, waivers, roster limits, and injury availability
-                    are not modeled. Nothing is submitted to ESPN.
+                    Compare optimized starters each week, including known byes,
+                    current-week injury availability, and roster moves for
+                    unequal trades. Missing weekly forecasts use labeled ROS
+                    estimates. Nothing is submitted to ESPN.
                   </p>
                 </div>
               </div>
@@ -1083,13 +1223,64 @@ export default function Dashboard() {
                   </select>
                 </label>
               </div>
+              <div className="trade-period-controls">
+                <label>
+                  Evaluate trades for
+                  <select
+                    value={tradeHorizon}
+                    onChange={(e) =>
+                      setTradeHorizon(e.target.value as TradeHorizon)
+                    }
+                  >
+                    {Object.entries(horizonLabels)
+                      .filter(([key]) => key !== 'ros')
+                      .map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                    <option value="ros">{horizonLabels.ros}</option>
+                  </select>
+                </label>
+                <label>
+                  Playoffs start in week
+                  <input
+                    type="number"
+                    min="1"
+                    max={league.finalWeek}
+                    step="1"
+                    placeholder="Choose week"
+                    value={playoffWeek || league.playoffStartWeek || ''}
+                    onChange={(e) => setPlayoffWeek(e.target.value)}
+                  />
+                </label>
+                <p className="finder-note">
+                  {league.playoffStartWeek
+                    ? 'Playoff timing imported from league settings; you can override it.'
+                    : 'Set the playoff start week to enable playoff comparisons.'}{' '}
+                  Gains are projected points over the selected period.
+                </p>
+              </div>
+              {horizonError && (
+                <p className="form-error" role="alert">
+                  {horizonError}
+                </p>
+              )}
+              <TradeHistoryPanel league={league} />
               <TradeFinder
-                league={league}
+                league={tradeLeague}
+                horizon={tradeHorizon}
                 myTeamId={myTeamId}
                 onReview={(candidate) => {
                   setPartnerId(candidate.partnerId);
                   setSend(candidate.send.map((p) => p.id));
                   setReceive(candidate.receive.map((p) => p.id));
+                  setTradePickup(
+                    Boolean(
+                      candidate.plan.mine.pickup ||
+                      candidate.plan.partner.pickup,
+                    ),
+                  );
                   requestAnimationFrame(() =>
                     document
                       .querySelector('.trade-grid')
@@ -1111,6 +1302,32 @@ export default function Dashboard() {
                   label="YOU RECEIVE"
                 />
               </div>
+              {send.length > 0 &&
+                receive.length > 0 &&
+                send.length !== receive.length && (
+                  <>
+                    <label className="pickup-option">
+                      <input
+                        type="checkbox"
+                        checked={tradePickup}
+                        onChange={(e) => setTradePickup(e.target.checked)}
+                      />{' '}
+                      Include an optional free-agent pickup in the open spot
+                    </label>
+                    {planError ? (
+                      <p className="form-error" role="alert">
+                        {planError}
+                      </p>
+                    ) : (
+                      tradePlan && (
+                        <TradeMoves
+                          plan={tradePlan}
+                          partnerName={partner.name}
+                        />
+                      )
+                    )}
+                  </>
+                )}
               <div className="panel trade-results">
                 <div>
                   <span className="eyebrow">PROJECTED LINEUP IMPACT</span>
@@ -1129,12 +1346,16 @@ export default function Dashboard() {
                     {!send.length || !receive.length
                       ? 'Choose at least one player on each side to compare.'
                       : !canAnalyze
-                        ? 'Both teams need projections for every player and enough eligible players to fill their starting slots. Upload missing ROS values in projection settings.'
-                        : 'Best eligible starting lineup, optimized independently before and after.'}
+                        ? 'Both teams need projection coverage and enough eligible players for their starting slots. Check the selected period, roster moves, and projection settings.'
+                        : `${horizonLabels[tradeHorizon]} · optimized independently before and after. ${tradePlan?.mine.pickup || tradePlan?.partner.pickup ? 'Includes the optional free-agent pickup.' : ''}`}
                   </p>
                 </div>
                 <div className="trade-impact">
-                  <span>Your ROS change</span>
+                  <span>
+                    {tradeHorizon === 'ros'
+                      ? 'Your ROS change'
+                      : 'Your projected change'}
+                  </span>
                   <strong
                     className={canAnalyze && delta >= 0 ? 'green-text' : ''}
                   >
@@ -1149,7 +1370,11 @@ export default function Dashboard() {
                   )}
                 </div>
                 <div className="trade-impact partner-impact">
-                  <span>Partner’s ROS change</span>
+                  <span>
+                    {tradeHorizon === 'ros'
+                      ? 'Partner’s ROS change'
+                      : 'Partner’s projected change'}
+                  </span>
                   <strong>
                     {canAnalyze
                       ? `${partnerAfter.total - partnerBefore.total >= 0 ? '+' : ''}${points(partnerAfter.total - partnerBefore.total)}`
@@ -1157,6 +1382,33 @@ export default function Dashboard() {
                   </strong>
                 </div>
               </div>
+              {canAnalyze &&
+                analysis.tradeOnly &&
+                (tradePlan?.mine.pickup || tradePlan?.partner.pickup) && (
+                  <p className="finder-note">
+                    Gains without the optional pickup: your team{' '}
+                    {analysis.tradeOnly.mine >= 0 ? '+' : ''}
+                    {points(analysis.tradeOnly.mine)} · their team{' '}
+                    {analysis.tradeOnly.partner >= 0 ? '+' : ''}
+                    {points(analysis.tradeOnly.partner)}.
+                  </p>
+                )}
+              {canAnalyze && tradePlan && tradeHorizon !== 'ros' && (
+                <div className="panel trade-weekly-details">
+                  <TradeWeeklyComparison
+                    league={tradeLeague}
+                    before={mine.players}
+                    after={tradePlan.mine.roster}
+                    name="Your team"
+                  />
+                  <TradeWeeklyComparison
+                    league={tradeLeague}
+                    before={partner.players}
+                    after={tradePlan.partner.roster}
+                    name={partner.name}
+                  />
+                </div>
+              )}
               <div className="trade-bottom">
                 <span>
                   <Shield size={14} />
@@ -1167,6 +1419,7 @@ export default function Dashboard() {
                   onClick={() => {
                     setSend([]);
                     setReceive([]);
+                    setTradePickup(false);
                   }}
                 >
                   Reset trade
@@ -1254,6 +1507,19 @@ export default function Dashboard() {
             />
             My league is private
           </label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={includeTradeHistory}
+              onChange={(e) => setIncludeTradeHistory(e.target.checked)}
+              disabled={loading}
+            />
+            Import trade history for this season
+          </label>
+          <p className="finder-note">
+            Includes accessible accepted and declined offer records. History
+            adds time to the import and is saved in this browser.
+          </p>
           {privateLeague && (
             <div className="private-fields">
               <p>
@@ -1543,7 +1809,14 @@ function TradePicker({
   onChange: (ids: number[]) => void;
   label: string;
 }) {
-  const positionOrder: Player['position'][] = ['QB', 'RB', 'WR', 'TE', 'K'];
+  const positionOrder: Player['position'][] = [
+    'QB',
+    'RB',
+    'WR',
+    'TE',
+    'K',
+    'D/ST',
+  ];
   const players = [...team.players].sort(
     (a, b) =>
       positionOrder.indexOf(a.position) - positionOrder.indexOf(b.position),

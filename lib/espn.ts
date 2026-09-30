@@ -1,11 +1,4 @@
-import {
-  League,
-  Player,
-  Position,
-  Team,
-  slotNames,
-  isDefensiveSlot,
-} from './types';
+import { League, Player, Position, Team, slotNames, isIDPSlot } from './types';
 type Stats = {
   seasonId?: number;
   statSourceId?: number;
@@ -21,6 +14,7 @@ export type RawPlayer = {
   proTeamId?: number;
   eligibleSlots?: number[];
   injuryStatus?: string;
+  byeWeek?: number;
   stats?: Stats[];
   ownership?: { percentOwned?: number };
 };
@@ -54,6 +48,11 @@ export type ESPNResponse = {
   settings?: {
     name?: string;
     rosterSettings?: { lineupSlotCounts?: Record<string, number> };
+    scheduleSettings?: {
+      matchupPeriodCount?: number;
+      matchupPeriodLength?: number;
+      matchupPeriods?: Record<string, number[]>;
+    };
     scoringSettings?: { scoringItems?: { statId: number; points: number }[] };
   };
   members?: {
@@ -105,6 +104,7 @@ const pos: Record<number, Position> = {
   4: 'TE',
   5: 'K',
   15: 'QB',
+  16: 'D/ST',
 };
 export const isSupportedPlayer = (p: RawPlayer) =>
   pos[p.defaultPositionId ?? 0] !== undefined;
@@ -179,13 +179,15 @@ export function normalizePlayer(
     nflTeam: nfl[p.proTeamId ?? 0] ?? 'FA',
     slot: slotNames[slotId] ?? `Slot ${slotId}`,
     slotId,
-    eligibleSlots: (p.eligibleSlots ?? []).filter((id) => !isDefensiveSlot(id)),
+    eligibleSlots: (p.eligibleSlots ?? []).filter((id) => !isIDPSlot(id)),
     status: p.injuryStatus ?? 'UNKNOWN',
     weekly,
     ros,
     season: seasonPoints,
     actual,
     projectionSource,
+    weeklyProjections: Object.fromEntries(future),
+    ...(p.byeWeek !== undefined ? { byeWeek: p.byeWeek } : {}),
   };
 }
 export function normalizeLeague(raw: ESPNResponse, season: number): League {
@@ -197,11 +199,17 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
     finalWeek = raw.status?.finalScoringPeriod ?? 18;
   let estimated = 0,
     unavailable = 0;
+  const slotCounts = raw.settings?.rosterSettings?.lineupSlotCounts;
+  const rosterCapacity = slotCounts
+    ? Object.entries(slotCounts)
+        .filter(([id]) => ![21, 25].includes(Number(id)))
+        .reduce((sum, [, count]) => sum + count, 0)
+    : undefined;
   const teams: Team[] = raw.teams.map((t) => {
     const record = t.record?.overall;
     const players: Player[] = (t.roster?.entries ?? []).flatMap((entry) => {
       const p = entry.playerPoolEntry?.player;
-      if (!p || !isSupportedPlayer(p) || isDefensiveSlot(entry.lineupSlotId))
+      if (!p || !isSupportedPlayer(p) || isIDPSlot(entry.lineupSlotId))
         return [];
       const player = normalizePlayer(
         p,
@@ -223,7 +231,17 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
           [m!.firstName, m!.lastName].filter(Boolean).join(' '),
       )
       .filter(Boolean);
+    const hiddenRosterSpots = (t.roster?.entries ?? []).filter(
+      (entry) =>
+        ![21, 25].includes(entry.lineupSlotId) &&
+        Boolean(entry.playerPoolEntry?.player) &&
+        (!isSupportedPlayer(entry.playerPoolEntry!.player!) ||
+          isIDPSlot(entry.lineupSlotId)),
+    ).length;
     return {
+      ...(rosterCapacity !== undefined
+        ? { rosterCapacity: Math.max(0, rosterCapacity - hiddenRosterSpots) }
+        : {}),
       id: t.id,
       name:
         t.name ??
@@ -247,7 +265,7 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
       ([id, count]) =>
         count > 0 &&
         ![20, 21, 25].includes(Number(id)) &&
-        !isDefensiveSlot(Number(id)),
+        !isIDPSlot(Number(id)),
     )
     .map(([id, count]) => ({
       id: Number(id),
@@ -267,7 +285,18 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
     warnings.push(
       'ESPN did not return starting lineup settings; trade lineup comparisons are unavailable.',
     );
+  const schedule = raw.settings?.scheduleSettings;
+  const regularWeeks = Object.entries(schedule?.matchupPeriods ?? {})
+    .filter(([id]) => Number(id) <= (schedule?.matchupPeriodCount ?? 0))
+    .flatMap(([, weeks]) => weeks);
+  const regularEnd = regularWeeks.length
+    ? Math.max(...regularWeeks)
+    : (schedule?.matchupPeriodCount ?? 0) *
+      (schedule?.matchupPeriodLength ?? 1);
   return {
+    ...(regularEnd > 0 && regularEnd < finalWeek
+      ? { playoffStartWeek: regularEnd + 1 }
+      : {}),
     id: String(raw.id),
     name: raw.settings?.name ?? 'ESPN League',
     season,
@@ -305,4 +334,39 @@ export function parseLeagueId(input: string): string {
   throw new Error(
     'Enter an ESPN league ID or a league URL containing leagueId.',
   );
+}
+
+// Public season metadata contains an explicit byeWeek; an absent schedule
+// never becomes an invented bye. This enriches roster and waiver snapshots.
+export async function enrichByeWeeks(league: League): Promise<void> {
+  const response = await fetch(
+    `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${league.season}?view=proTeamSchedules_wl`,
+    {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    },
+  );
+  if (!response.ok) throw new Error('NFL bye schedule unavailable.');
+  const data = await response.json();
+  if (!Array.isArray(data.settings?.proTeams))
+    throw new Error('Missing NFL schedule.');
+  const byes = new Map<string, number>();
+  for (const team of data.settings.proTeams) {
+    if (
+      nfl[team.id] &&
+      Number.isInteger(team.byeWeek) &&
+      team.byeWeek >= 0 &&
+      team.byeWeek <= 18
+    )
+      byes.set(nfl[team.id], team.byeWeek);
+  }
+  if (!byes.size) throw new Error('Missing NFL bye weeks.');
+  for (const p of [
+    ...league.teams.flatMap((t) => t.players),
+    ...(league.waiverWire?.players ?? []),
+  ]) {
+    const bye = byes.get(p.nflTeam);
+    if (bye !== undefined) p.byeWeek = bye;
+  }
 }

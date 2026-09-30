@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { normalizeLeague, parseLeagueId, ESPNResponse } from '@/lib/espn';
+import {
+  normalizeLeague,
+  parseLeagueId,
+  ESPNResponse,
+  enrichByeWeeks,
+} from '@/lib/espn';
+import { fetchTradeHistory } from '@/lib/trade-history';
 import { fetchWaiverWire } from '@/lib/waivers';
 import { isAllowedRequestOrigin } from '@/lib/request-origin';
 export const runtime = 'nodejs';
@@ -77,6 +83,16 @@ export async function POST(request: NextRequest) {
       league.warnings.push(
         'Waiver wire could not be loaded. Sync ESPN to try again; imported rosters are available.',
       );
+    }
+    try {
+      await enrichByeWeeks(league);
+    } catch {
+      league.warnings.push(
+        'NFL bye weeks could not be loaded. Weekly trade estimates assume unknown byes are playable; sync ESPN to retry.',
+      );
+    }
+    if (body.includeTradeHistory === true) {
+      league.tradeHistory = await fetchTradeHistory(url, headers, league);
     }
     return respond({ league });
   } catch (error) {

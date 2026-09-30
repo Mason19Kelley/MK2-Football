@@ -160,3 +160,28 @@ test('kickers never enter either side of one-for-one or two-for-two trades but s
     assert.ok(t.partner.after.players.some((p) => p.id === 101));
   }
 });
+
+test('D/ST never enters trade offers while its points remain in both team lineups', async () => {
+  const league = fixture();
+  league.slots.push({ id: 16, label: 'D/ST', count: 1 });
+  for (const [i, team] of league.teams.entries()) {
+    team.players.push({
+      ...player(200 + i, 30 + i * 10, 16),
+      position: 'D/ST',
+    });
+  }
+  const result = await findTrades(league, 1, {
+    ...options,
+    maxPlayers: 2,
+    limit: 100,
+  });
+  assert.equal(result.checked, 18);
+  assert.ok(result.candidates.length > 0);
+  for (const t of result.candidates) {
+    assert.ok([...t.send, ...t.receive].every((p) => p.position !== 'D/ST'));
+    assert.equal(t.mine.before.total, 170);
+    assert.equal(t.partner.before.total, 180);
+    assert.ok(t.mine.after.players.some((p) => p.id === 200));
+    assert.ok(t.partner.after.players.some((p) => p.id === 201));
+  }
+});

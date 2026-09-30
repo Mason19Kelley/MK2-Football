@@ -36,10 +36,11 @@ Implementation references: [ESPN read API](https://lm-api-reads.fantasy.espn.com
 - Upload your own ROS projections and restore original values.
 - Browse free agents and players on waivers, filter by position and availability, and compare a potential add/drop against your roster with weekly or ROS projections.
 - Select players on both sides of a hypothetical trade and compare the best eligible starting lineups. No trades or roster changes are sent to ESPN.
-- Find trades across the league that improve both teams’ optimized starting lineups, then load a result into the trade simulator.
+- Find equal-size or two-for-one trades with drop and optional pickup plans, then review the same moves in the simulator.
+- Compare weekly optimized starters and coverage for the next three weeks, playoffs, or the full remaining season.
 - Use the same functionality on mobile; league snapshots and custom projections persist across reloads.
 
-Defenses and individual defensive players are excluded throughout the app, including sample rosters, ESPN imports, waiver pools, saved snapshots, and starting-lineup slots. Kickers remain available in rosters and waiver comparisons.
+D/ST and kickers are included in rosters, team projections, and waiver comparisons, but are always excluded from trade-finder offers. Individual defensive players and their starting slots are excluded throughout the app.
 
 ## Projection methodology
 
@@ -60,13 +61,17 @@ Player IDs must belong to a league roster or the imported waiver pool. The templ
 
 ## Trade model
 
-In **Trade lab → Trade finder**, choose all other teams or a specific partner, one-for-one trades or one-for-one plus two-for-two trades, and a minimum ROS gain for each team. The finder exhaustively searches those equal-size swaps and shows the top 20 results ranked by your gain, the smaller of the two gains (balanced), or combined gain. Every result must improve both optimized lineups by more than 0.05 points and meet the chosen minimum. Expand a result to compare starting players, or choose **Review in trade lab** to load both sides into the calculator. Searches can be canceled; changing projections, your team, or search settings clears old results. Teams with missing projections or incomplete starting lineups are reported and skipped.
+In **Trade lab**, choose a scoring period: **Full remaining season**, **Next three weeks**, **Playoff weeks**, or the legacy **Season-total lineup**. The period applies to both the finder and simulator. Playoff timing is imported from ESPN regular-season matchup periods, including multi-week periods. You can override the playoff start week; leagues without this setting need a start week before playoff searches work.
 
-Equal-size swaps preserve roster counts. Kickers and IR players are always excluded from trade packages. Acceptance likelihood is not estimated. Candidate generation, the mutual-improvement filter, and result ranking are separate in `lib/trade-finder.ts`, allowing a later objective and acceptance model to use the same lineup impacts.
+The finder searches all other teams or a selected partner. Trade sizes include one-for-one, one-for-one plus two-for-two, and **two-for-one plus one-for-two**. Each result must improve both teams' optimized lineups over the selected period by more than 0.05 points and meet the minimum gain. Results can be ranked by your gain, balanced gains, or combined gain. It returns the top 20 and reports the total matches and checked packages. Searches can be canceled; changing teams, projections, period, or search settings clears stale results.
 
-The calculator finds a maximum-weight assignment between players and the league's starting slots, using ESPN slot eligibility. It supports repeated slots, flex, superflex, and team QB; each player fills at most one slot. IR players are excluded. Before and after lineups are optimized independently for both teams. Recommendations require both rosters to have full projection coverage and enough eligible players to fill every starting slot.
+Unequal trades include a concrete roster plan. The team receiving an extra player gets a drop suggestion only when needed for roster capacity. Imported capacity accounts for players hidden by the app (such as defenses); older snapshots use current non-IR roster counts as a conservative fallback. Drops keep incoming players and favor the best projected lineup, preserving stronger depth on ties. If you open a spot, optionally include a free-agent pickup that improves the planned lineup. Players on waivers and newly dropped players are excluded from these immediate pickup suggestions. The candidate pool is reduced only when another free agent with the same starting-slot eligibility dominates it in every evaluated week. The finder labels pickup-dependent gains and shows gains without the pickup. Review loads the package and pickup choice into the simulator, which uses the same planner.
 
-This first model compares season-total lineup potential. It does not simulate week-by-week lineups, byes, future injuries, waiver replacements, roster limits, keeper value, or playoff schedules. These are natural next steps for a fuller trade calculator. A trade may require drops or additional moves in ESPN even if the simulator can fill a lineup.
+Weekly evaluation optimizes each week's lineup independently with a maximum-weight assignment that supports repeated slots, flex, superflex, and team QB without double-counting a player. Known NFL byes and current-week OUT, DOUBTFUL, INACTIVE, and suspended players are unavailable. IR players stay excluded throughout the horizon; future injury recovery is not inferred from today's status. A week with insufficient available starters displays the empty slots and scores them as zero, rather than hiding all trade results for that team. Missing projection values suppress recommendations. Weekly details show both teams' before/after starters, coverage, and gains, plus next-three-week, playoff, and remaining-season summaries.
+
+ESPN weekly forecasts, including explicit zeros, are retained on roster and waiver players. Missing weeks use a nonnegative residual ROS estimate after subtracting known forecasts, allocated across unforecast weeks. Known byes score zero and do not increase other estimated weeks to compensate. Custom ROS overrides are evenly allocated across non-bye weeks and labeled estimates. Sample forecasts and byes are illustrative. If bye metadata is missing, the UI states that unknown byes are assumed playable. Schedule fetch failures preserve imported rosters and prompt another sync. These estimates do not predict future injuries, changing roles, or matchup strength.
+
+Kickers and IR players are excluded from finder trade packages; kickers still fill eligible starting slots and can be free-agent replacements. Manual trades can contain larger equal-size packages, but unequal plans support at most one net extra player per team. Acceptance likelihood is not estimated. Roster plans do not enforce position-specific roster limits, acquisition locks, transaction deadlines, waiver rules, or keeper value. No trade, pickup, or drop is submitted to ESPN.
 
 ## Waiver wire
 
@@ -97,6 +102,8 @@ The optimizer is also checked against exhaustive assignments on varied small ros
 - `components/waiver-page.tsx` — waiver browser and projection comparison.
 - `lib/trades.ts` — maximum-weight lineup assignment and trade simulation.
 - `lib/trade-finder.ts` — cancellable trade search, independent team impacts, and ranking.
+- `lib/trade-plans.ts` — unequal roster plans and optional free-agent replacements.
+- `lib/weekly-trades.ts` — weekly availability, estimate allocation, and time horizons.
 - `components/trade-finder.tsx` — search controls, trade suggestions, and lineup comparisons.
 - `lib/projections.ts` — atomic projection CSV parsing and overrides.
 - `lib/demo.ts` — sample league fixtures.
@@ -104,3 +111,24 @@ The optimizer is also checked against exhaustive assignments on varied small ros
 - `app/globals.css` — responsive styling and charts.
 
 Current scope is a single-manager app with local browser storage. It has no user accounts, cloud sync, automatic background polling, or persistent ESPN credential store. Deploy as a Node-capable Next.js app with HTTPS. For a public multi-user service, add authentication, request rate limits, encrypted credential management if background sync is introduced, and a durable database.
+
+## ESPN trade-history collection
+
+**Connect ESPN / Sync ESPN → Import trade history for this season** imports accessible proposal, acceptance, decline, veto, and uphold records. **Trade lab → Trade history** shows coverage, recent records, and **Export trade dataset** downloads normalized JSON. History is saved with the browser's league snapshot. Older snapshots work without history. Turn the checkbox off for a faster roster-only import.
+
+For collecting several seasons or leagues into local files:
+
+```sh
+npm run collect:trades -- --league 899513 --seasons 2024,2025
+npm run collect:trades -- --league 123456 --seasons 2025,2026 --output data/trade-history
+```
+
+For private leagues, set `ESPN_S2` and `ESPN_SWID` in the collector's environment. Do not place cookies in command arguments or dataset files. Each season writes a new timestamped JSON file; default output is git-ignored. Collection is read-only, has bounded concurrency/timeouts, and reports failed weeks. A partial collection still writes the accessible records and exits with status 1. Repeated snapshots must be deduplicated by league, season, source, and event ID before combining them for analysis.
+
+The collector queries `mTransactions2` for preseason week 0 through the current/final week (capped at 25), and paginates up to 500 completed-trade activity topics from `kona_league_communication`. ESPN's unofficial endpoints may withhold player details, omit transaction history, or return 404 for historical activity. Coverage describes requests that succeeded, not a guarantee that ESPN disclosed every offer. Normalized exports omit member identities and credentials; player IDs and team IDs are retained. Displayed player names come from the imported roster and are not historical valuation features.
+
+`events` preserves separate transaction stages and activity records. `examples` contains at most one binary label per explicitly linked offer component, requiring an executed acceptance/decline and an unambiguous complete two-team player package. Exact ESPN `relatedTransactionId` links can recover a hidden package from another record. Pending/canceled/error records, vetoes, conflicting labels, changed packages, partial packages, and unsupported assets are excluded. Completed activity records are retained separately and never matched to proposals by a guessed date or player combination. Counts are records, not unique completed trades.
+
+This is the data-collection stage, not a trained acceptance model. Every example has `historicalFeatures: null`: offer-time rosters, injuries, scoring settings, and player valuations must be acquired before training. Do not substitute today's projections or future performance. Unmade trades are not rejected offers. Model validation should hold out later seasons and entire leagues, then evaluate calibration on real accepted/declined proposals. One league's completed trades alone cannot justify acceptance percentages.
+
+Implementation references: [ESPN transaction reader](https://github.com/cwendt94/espn-api/blob/master/espn_api/football/league.py), [transaction fields](https://github.com/cwendt94/espn-api/blob/master/espn_api/football/transaction.py), [activity fields](https://github.com/cwendt94/espn-api/blob/master/espn_api/football/activity.py).

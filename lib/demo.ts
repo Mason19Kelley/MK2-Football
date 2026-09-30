@@ -128,6 +128,30 @@ const teams: Team[] = names.map((name, i) => {
   ];
   const players = rows.map(([r, s], j) => player(r, s, j));
   players.push({
+    id: -100 - i,
+    name: [
+      'Baltimore Ravens',
+      'Buffalo Bills',
+      'Denver Broncos',
+      'Philadelphia Eagles',
+      'Pittsburgh Steelers',
+      'Houston Texans',
+      'Minnesota Vikings',
+      'Detroit Lions',
+    ][i],
+    position: 'D/ST',
+    nflTeam: ['BAL', 'BUF', 'DEN', 'PHI', 'PIT', 'HOU', 'MIN', 'DET'][i],
+    slot: 'D/ST',
+    slotId: 16,
+    eligibleSlots: [16, 20],
+    status: 'ACTIVE',
+    weekly: 7.4 + i * 0.2,
+    ros: 92.5 + i * 2.5,
+    season: 120,
+    actual: 23,
+    projectionSource: 'sample',
+  });
+  players.push({
     id: -200 - i,
     name: [
       'Brandon Aubrey',
@@ -169,6 +193,7 @@ export const demoLeague: League = {
   season: 2026,
   week: 4,
   finalWeek: 17,
+  playoffStartWeek: 15,
   scoring: 'PPR',
   source: 'demo',
   syncedAt: '',
@@ -179,12 +204,38 @@ export const demoLeague: League = {
     { id: 4, label: 'WR', count: 2 },
     { id: 6, label: 'TE', count: 1 },
     { id: 23, label: 'FLEX', count: 1 },
+    { id: 16, label: 'D/ST', count: 1 },
     { id: 17, label: 'K', count: 1 },
   ],
   warnings: [
     'Sample league: all rosters, records, and projections are illustrative. Connect ESPN to see your league.',
   ],
 };
+
+// Restore sample defenses removed by older app versions without replacing
+// cached roster changes or custom projections. Real leagues must sync ESPN.
+export function restoreDemoDefenses(league: League): League {
+  if (
+    league.source !== 'demo' ||
+    !league.slots.some((s) => s.id === 0) ||
+    !league.slots.some((s) => s.id === 6)
+  )
+    return league;
+  return {
+    ...league,
+    slots: league.slots.some((s) => s.id === 16)
+      ? league.slots
+      : [...league.slots, { id: 16, label: 'D/ST', count: 1 }],
+    teams: league.teams.map((t) => {
+      const defense = demoLeague.teams
+        .find((sample) => sample.id === t.id)
+        ?.players.find((p) => p.position === 'D/ST');
+      return !defense || t.players.some((p) => p.position === 'D/ST')
+        ? t
+        : { ...t, players: [...t.players, defense] };
+    }),
+  };
+}
 
 const waiverRows: typeof pool = [
   [14881, 'Geno Smith', 'QB', 'LV', 17.2],
@@ -217,3 +268,44 @@ demoLeague.waiverWire.players.push({
   availability: 'FREEAGENT',
   percentOwned: 35,
 });
+demoLeague.waiverWire.players.push({
+  ...teams[0].players.find((p) => p.position === 'D/ST')!,
+  id: -401,
+  name: 'New England Patriots',
+  nflTeam: 'NE',
+  slot: 'BN',
+  slotId: 20,
+  weekly: 6.8,
+  ros: 85,
+  availability: 'WAIVERS',
+  percentOwned: 28,
+});
+
+// Illustrative bye weeks and forecasts, consistent within each NFL team.
+const demoByes: Record<string, number> = {};
+for (const [i, team] of Object.entries([
+  ...new Set([
+    ...teams.flatMap((t) => t.players.map((p) => p.nflTeam)),
+    ...demoLeague.waiverWire.players.map((p) => p.nflTeam),
+  ]),
+]))
+  demoByes[team] = 5 + (Number(i) % 9);
+for (const p of [
+  ...teams.flatMap((t) => t.players),
+  ...demoLeague.waiverWire.players,
+]) {
+  p.byeWeek = demoByes[p.nflTeam];
+  p.weeklyProjections = Object.fromEntries(
+    Array.from({ length: 14 }, (_, i) => {
+      const week = i + 4;
+      return [
+        week,
+        week === p.byeWeek
+          ? 0
+          : week === 4
+            ? p.weekly!
+            : (p.ros! - p.weekly!) / 12,
+      ];
+    }),
+  );
+}

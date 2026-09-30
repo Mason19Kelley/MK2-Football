@@ -1050,6 +1050,9 @@ h1 {
 .bar-K {
   background: #c5ccb4;
 }
+.bar-DST {
+  background: #b2bf9e;
+}
 .chart-x-label {
   position: absolute;
   bottom: -16px;
@@ -2970,4 +2973,225 @@ h1 {
   .finder-card {
     padding: 14px;
   }
+}
+
+.pickup-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.pickup-option input {
+  flex-shrink: 0;
+}
+.trade-moves {
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.trade-moves p {
+  margin: 0 0 6px;
+}
+.trade-moves small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.players-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+.players-toolbar {
+  justify-content: space-between;
+  gap: 12px;
+}
+.players-toolbar select {
+  max-width: 240px;
+}
+.players-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  white-space: nowrap;
+}
+.players-table th {
+  padding: 14px 20px;
+  background: #fcfdfa;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--line);
+}
+.players-table th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: inherit;
+  font-size: inherit;
+  text-transform: inherit;
+  padding: 0;
+}
+.players-table td {
+  padding: 13px 20px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.players-table tbody tr:hover {
+  background: #fbfdfa;
+}
+.players-table .player-cell strong {
+  font-size: 12px;
+}
+.players-table .player-cell small {
+  font-size: 10px;
+}
+.players-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 16px;
+}
+@media (max-width: 750px) {
+  .players-toolbar {
+    flex-wrap: wrap;
+  }
+  .players-toolbar .search-field {
+    width: 100%;
+  }
+  .players-toolbar select {
+    width: 100%;
+    max-width: none;
+  }
+  .players-table th,
+  .players-table td {
+    padding: 12px;
+  }
+  .main-nav .nav-item {
+    padding: 8px;
+  }
+}
+
+.trade-period-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+  margin: 20px 0;
+}
+.trade-period-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.trade-period-controls select,
+.trade-period-controls input {
+  max-width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+}
+.trade-period-controls input {
+  width: 160px;
+}
+.trade-period-controls p {
+  flex-basis: 100%;
+  margin: 0;
+}
+.weekly-comparison {
+  min-width: 0;
+  margin: 18px 0;
+}
+.weekly-comparison h4 {
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+.weekly-gain-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  font-size: 11px;
+}
+.weekly-gain-summary span {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.weekly-gain-summary strong {
+  display: block;
+  font-size: 18px;
+  margin-top: 6px;
+}
+.weekly-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.weekly-impact-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.weekly-impact-table th,
+.weekly-impact-table td {
+  padding: 12px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.weekly-impact-table small {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.weekly-impact-table td:nth-child(2),
+.weekly-impact-table td:nth-child(3) {
+  width: 30%;
+}
+.trade-weekly-details {
+  margin-top: 20px;
+}
+@media (max-width: 600px) {
+  .trade-period-controls label {
+    width: 100%;
+  }
+  .trade-period-controls input {
+    width: 100%;
+  }
+  .weekly-gain-summary span {
+    padding: 8px;
+  }
+  .weekly-gain-summary strong {
+    font-size: 15px;
+  }
+  .weekly-impact-table {
+    min-width: 520px;
+  }
+}
+
+.trade-history {
+  padding: 24px;
+  margin-bottom: 26px;
+}
+.trade-history summary {
+  cursor: pointer;
+  font-size: 13px;
+  margin: 16px 0;
+}
+.trade-history td {
+  white-space: normal;
+  min-width: 100px;
 }

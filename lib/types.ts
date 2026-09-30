@@ -1,4 +1,6 @@
-export type Position = 'QB' | 'RB' | 'WR' | 'TE' | 'K';
+import type { TradeHistory } from './trade-history';
+
+export type Position = 'QB' | 'RB' | 'WR' | 'TE' | 'D/ST' | 'K';
 export type Player = {
   id: number;
   name: string;
@@ -14,6 +16,8 @@ export type Player = {
   actual: number | null;
   projectionSource:
     'sample' | 'estimate' | 'weekly-sum' | 'unavailable' | 'custom';
+  weeklyProjections?: Record<number, number>;
+  byeWeek?: number;
 };
 export type WaiverPlayer = Player & {
   availability: 'FREEAGENT' | 'WAIVERS';
@@ -34,6 +38,7 @@ export type Team = {
   ties: number;
   pointsFor: number;
   players: Player[];
+  rosterCapacity?: number;
 };
 export type League = {
   id: string;
@@ -48,6 +53,8 @@ export type League = {
   slots: { id: number; label: string; count: number }[];
   warnings: string[];
   waiverWire?: WaiverWire;
+  tradeHistory?: TradeHistory;
+  playoffStartWeek?: number;
 };
 export const slotNames: Record<number, string> = {
   0: 'QB',
@@ -58,6 +65,7 @@ export const slotNames: Record<number, string> = {
   5: 'WR/TE',
   6: 'TE',
   7: 'OP',
+  16: 'D/ST',
   17: 'K',
   18: 'P',
   19: 'HC',
@@ -66,17 +74,16 @@ export const slotNames: Record<number, string> = {
   23: 'FLEX',
   25: 'RES',
 };
-export const positions = ['QB', 'RB', 'WR', 'TE', 'K'] as const;
-export const isDefensiveSlot = (id: number) =>
-  (id >= 8 && id <= 16) || id === 24;
+export const positions = ['QB', 'RB', 'WR', 'TE', 'D/ST', 'K'] as const;
+export const isIDPSlot = (id: number) => (id >= 8 && id <= 15) || id === 24;
 
 // Also applies to older browser snapshots with positions no longer supported.
-export function removeDefensivePlayers(league: League): League {
+export function removeIDPPlayers(league: League): League {
   const supported = (p: Player) =>
-    positions.includes(p.position) && !isDefensiveSlot(p.slotId);
+    positions.includes(p.position) && !isIDPSlot(p.slotId);
   const clean = <T extends Player>(p: T): T => ({
     ...p,
-    eligibleSlots: p.eligibleSlots.filter((id) => !isDefensiveSlot(id)),
+    eligibleSlots: p.eligibleSlots.filter((id) => !isIDPSlot(id)),
   });
   return {
     ...league,
@@ -84,7 +91,7 @@ export function removeDefensivePlayers(league: League): League {
       ...t,
       players: t.players.filter(supported).map(clean),
     })),
-    slots: league.slots.filter((s) => !isDefensiveSlot(s.id)),
+    slots: league.slots.filter((s) => !isIDPSlot(s.id)),
     ...(league.waiverWire
       ? {
           waiverWire: {

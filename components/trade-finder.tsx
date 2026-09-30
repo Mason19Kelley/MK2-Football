@@ -3,19 +3,25 @@
 import { useEffect, useRef, useState } from 'react';
 import { Search, Loader2, ArrowRight } from 'lucide-react';
 import { League, points } from '@/lib/types';
+import { TradeMoves } from './trade-moves';
+import { TradeWeeklyComparison } from './trade-weekly-comparison';
+import { TradeHorizon, horizonLabels } from '@/lib/weekly-trades';
 import { findTrades, TradeCandidate, TradeRanking } from '@/lib/trade-finder';
 
 export function TradeFinder({
   league,
   myTeamId,
+  horizon,
   onReview,
 }: {
   league: League;
   myTeamId: number;
+  horizon: TradeHorizon;
   onReview: (trade: TradeCandidate) => void;
 }) {
   const [partnerId, setPartnerId] = useState('all');
-  const [maxPlayers, setMaxPlayers] = useState<1 | 2>(1);
+  const [tradeSize, setTradeSize] = useState('1');
+  const [includePickup, setIncludePickup] = useState(false);
   const [minimumGain, setMinimumGain] = useState('1');
   const [ranking, setRanking] = useState<TradeRanking>('mine');
   const [result, setResult] = useState<Awaited<
@@ -34,7 +40,16 @@ export function TradeFinder({
     return () => {
       controller.current?.abort();
     };
-  }, [league, myTeamId, partnerId, maxPlayers, minimumGain, ranking]);
+  }, [
+    league,
+    myTeamId,
+    partnerId,
+    tradeSize,
+    includePickup,
+    minimumGain,
+    ranking,
+    horizon,
+  ]);
   useEffect(() => {
     setPartnerId('all');
   }, [league, myTeamId]);
@@ -53,7 +68,10 @@ export function TradeFinder({
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const next = await findTrades(league, myTeamId, {
         partnerId: partnerId === 'all' ? undefined : Number(partnerId),
-        maxPlayers,
+        maxPlayers: tradeSize === '1' ? 1 : 2,
+        unequal: tradeSize === 'unequal',
+        includePickup,
+        horizon,
         minimumGain: Number(minimumGain),
         ranking,
         signal: current.signal,
@@ -99,15 +117,18 @@ export function TradeFinder({
         <label>
           Trade size
           <select
-            value={maxPlayers}
-            onChange={(e) => setMaxPlayers(Number(e.target.value) as 1 | 2)}
+            value={tradeSize}
+            onChange={(e) => setTradeSize(e.target.value)}
           >
             <option value={1}>One for one</option>
             <option value={2}>One for one + two for two</option>
+            <option value="unequal">Two for one + one for two</option>
           </select>
         </label>
         <label>
-          Minimum ROS gain per team
+          {horizon === 'ros'
+            ? 'Minimum ROS gain per team'
+            : 'Minimum gain per team'}
           <input
             type="number"
             min="0"
@@ -153,17 +174,27 @@ export function TradeFinder({
           </button>
         )}
       </form>
+      {tradeSize === 'unequal' && (
+        <label className="pickup-option">
+          <input
+            type="checkbox"
+            checked={includePickup}
+            onChange={(e) => setIncludePickup(e.target.checked)}
+          />{' '}
+          Include an optional free-agent pickup in the open spot
+        </label>
+      )}
       <p className="finder-note">
-        ROS points · Equal-size swaps preserve roster counts. Kickers and IR
-        players are excluded. Both teams must gain projected starter points.
-        Acceptance likelihood is not estimated.
+        {horizonLabels[horizon]} · Unequal swaps include a drop plan. D/ST,
+        kickers and IR players are excluded. Both teams must gain projected
+        starter points. Acceptance likelihood is not estimated.
       </p>
       <div role="status" className="finder-status">
         {running && `Checked ${checked.toLocaleString()} trades…`}
         {result &&
           (result.matched
             ? `Showing ${result.candidates.length} of ${result.matched.toLocaleString()} improving trades (${result.checked.toLocaleString()} checked).`
-            : `No trades met these criteria (${result.checked.toLocaleString()} checked). Try a lower minimum gain, more teams, or two-for-two trades.`)}
+            : `No trades met these criteria (${result.checked.toLocaleString()} checked). Try a lower minimum gain, more teams, another period, or a different trade size.`)}
       </div>
       {error && (
         <p className="form-error" role="alert">
@@ -172,8 +203,14 @@ export function TradeFinder({
       )}
       {result && result.skipped.length > 0 && (
         <p className="finder-note">
-          Skipped teams needing complete ROS projections or eligible starters:{' '}
-          {result.skipped.join(', ')}.
+          Skipped teams needing projections or eligible starters for this
+          period: {result.skipped.join(', ')}.
+        </p>
+      )}
+      {result && result.unplannable > 0 && (
+        <p className="finder-note">
+          Skipped {result.unplannable.toLocaleString()} packages without a valid
+          drop plan.
         </p>
       )}
       <div className="finder-results">
@@ -219,38 +256,70 @@ export function TradeFinder({
                   Your starters <strong>+{points(t.mine.gain)}</strong>
                   <small>
                     {points(t.mine.before.total)} → {points(t.mine.after.total)}{' '}
-                    ROS
+                    pts
                   </small>
                 </div>
                 <div>
                   Their starters <strong>+{points(t.partner.gain)}</strong>
                   <small>
                     {points(t.partner.before.total)} →{' '}
-                    {points(t.partner.after.total)} ROS
+                    {points(t.partner.after.total)} pts
                   </small>
                 </div>
               </div>
-              <details>
-                <summary>See starting lineup changes</summary>
-                {(
-                  [
-                    ['Your team', t.mine],
-                    [partner.name, t.partner],
-                  ] as const
-                ).map(([name, impact]) => (
-                  <div key={name} className="finder-lineup">
-                    <strong>{name}</strong>
-                    <p>
-                      Before:{' '}
-                      {impact.before.players.map((p) => p.name).join(', ')}
-                    </p>
-                    <p>
-                      After:{' '}
-                      {impact.after.players.map((p) => p.name).join(', ')}
-                    </p>
-                  </div>
-                ))}
-              </details>
+              {t.send.length !== t.receive.length && (
+                <TradeMoves plan={t.plan} partnerName={partner.name} />
+              )}
+              {(t.plan.mine.pickup || t.plan.partner.pickup) && (
+                <p className="finder-note">
+                  Gains without the optional pickup: your team{' '}
+                  {t.tradeOnly.mine >= 0 ? '+' : ''}
+                  {points(t.tradeOnly.mine)} · their team{' '}
+                  {t.tradeOnly.partner >= 0 ? '+' : ''}
+                  {points(t.tradeOnly.partner)}. Shown gains include the pickup.
+                </p>
+              )}
+              {horizon !== 'ros' ? (
+                <details>
+                  <summary>See starting lineup changes</summary>
+                  <TradeWeeklyComparison
+                    league={league}
+                    before={
+                      league.teams.find((p) => p.id === myTeamId)!.players
+                    }
+                    after={t.plan.mine.roster}
+                    name="Your team"
+                  />
+                  <TradeWeeklyComparison
+                    league={league}
+                    before={partner.players}
+                    after={t.plan.partner.roster}
+                    name={partner.name}
+                  />
+                </details>
+              ) : (
+                <details>
+                  <summary>See starting lineup changes</summary>
+                  {(
+                    [
+                      ['Your team', t.mine],
+                      [partner.name, t.partner],
+                    ] as const
+                  ).map(([name, impact]) => (
+                    <div key={name} className="finder-lineup">
+                      <strong>{name}</strong>
+                      <p>
+                        Before:{' '}
+                        {impact.before.players.map((p) => p.name).join(', ')}
+                      </p>
+                      <p>
+                        After:{' '}
+                        {impact.after.players.map((p) => p.name).join(', ')}
+                      </p>
+                    </div>
+                  ))}
+                </details>
+              )}
               <button className="button secondary" onClick={() => onReview(t)}>
                 Review in trade lab <ArrowRight size={14} />
               </button>

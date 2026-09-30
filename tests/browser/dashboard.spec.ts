@@ -45,11 +45,17 @@ test('trade simulator updates projected lineup value and resets', async ({
 }) => {
   await page.goto('/');
   await page.getByRole('button', { name: /^Trade lab/ }).click();
+  await page.getByLabel('Evaluate trades for').selectOption('next3');
   await page.getByRole('checkbox', { name: /James Conner/ }).check();
   await page.getByRole('checkbox', { name: /Bijan Robinson/ }).check();
   await expect(
     page.getByRole('heading', { name: 'Your starting lineup gets stronger.' }),
   ).toBeVisible();
+  await expect(page.locator('.trade-impact').first()).toContainText('+17.2');
+  await expect(
+    page.getByRole('region', { name: 'Your team weekly impact' }),
+  ).toContainText('Next 3 weeks');
+  await page.getByLabel('Evaluate trades for').selectOption('ros');
   await expect(page.locator('.trade-impact').first()).toContainText('+73.8');
   await page.getByRole('button', { name: 'Reset trade' }).click();
   await expect(
@@ -262,6 +268,10 @@ test('trade finder searches the league, reviews a result, and clears stale resul
       id,
       name: `Player ${id}`,
       ros,
+      weekly: ros / 14,
+      weeklyProjections: {},
+      byeWeek: 0,
+      projectionSource: 'estimate',
       position: slot === 2 ? 'RB' : 'WR',
       slotId: 20,
       eligibleSlots: [slot],
@@ -310,9 +320,9 @@ test('trade finder searches the league, reviews a result, and clears stale resul
   await expect(first.locator('.finder-gains')).toContainText('+');
   const partner = await first.getByRole('heading').innerText();
   await first.getByText('See starting lineup changes').click();
-  await expect(first.locator('.finder-lineup').first()).toContainText(
-    'Before:',
-  );
+  await expect(
+    first.getByRole('region', { name: 'Your team weekly impact' }),
+  ).toContainText('Remaining season');
   await first.getByRole('button', { name: 'Review in trade lab' }).click();
   await expect(
     page.getByRole('combobox', { name: 'Trade partner', exact: true }),
@@ -321,7 +331,7 @@ test('trade finder searches the league, reviews a result, and clears stale resul
     page.getByRole('heading', { name: 'Your starting lineup gets stronger.' }),
   ).toBeVisible();
   await expect(page.locator('.trade-picker input:checked')).toHaveCount(2);
-  await finder.getByLabel('Minimum ROS gain per team').fill('99999');
+  await finder.getByLabel('Minimum gain per team').fill('99999');
   await expect(finder.locator('.finder-card')).toHaveCount(0);
   await finder
     .getByRole('button', { name: 'Find trades', exact: true })
@@ -367,14 +377,14 @@ test('trade finder fits mobile and searches a selected partner', async ({
   await expect(finder.locator('.finder-card')).toHaveCount(0);
 });
 
-test('saved defensive players and slots are removed throughout the app and both stored snapshots', async ({
+test('saved D/ST projections are retained while IDP is removed from both stored snapshots', async ({
   page,
 }) => {
   await page.addInitScript((demo) => {
     const defense = {
       ...demo.teams[0].players[0],
       id: 999,
-      name: 'Hidden Team Defense',
+      name: 'Visible Team Defense',
       position: 'D/ST',
       slotId: 16,
       eligibleSlots: [16, 20],
@@ -391,13 +401,11 @@ test('saved defensive players and slots are removed throughout the app and both 
       ...demo,
       teams: demo.teams.map((t, i) => ({
         ...t,
-        players: i ? t.players : [...t.players, defense, idp],
+        players: i
+          ? t.players
+          : [...t.players.filter((p) => p.position !== 'D/ST'), defense, idp],
       })),
-      slots: [
-        ...demo.slots,
-        { id: 16, label: 'D/ST', count: 1 },
-        { id: 15, label: 'IDP', count: 1 },
-      ],
+      slots: [...demo.slots, { id: 15, label: 'IDP', count: 1 }],
       waiverWire: {
         ...demo.waiverWire,
         players: [
@@ -412,9 +420,11 @@ test('saved defensive players and slots are removed throughout the app and both 
     );
   }, demoLeague);
   await page.goto('/');
-  await expect(page.locator('.position-tabs')).not.toContainText('D/ST');
+  await expect(page.locator('.position-tabs')).toContainText('D/ST');
   await expect(page.locator('.position-tabs')).not.toContainText('IDP');
-  await expect(page.getByText('Hidden Team Defense')).toHaveCount(0);
+  await expect(
+    page.getByText('Visible Team Defense', { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText('Hidden Defensive Player')).toHaveCount(0);
   await expect
     .poll(() =>
@@ -423,17 +433,208 @@ test('saved defensive players and slots are removed throughout the app and both 
         return [saved.league, saved.original].every(
           (l) =>
             l.teams.every((t: { players: { position: string }[] }) =>
-              t.players.every((p) => !['D/ST', 'IDP'].includes(p.position)),
+              t.players.every((p) => p.position !== 'IDP'),
             ) &&
-            l.slots.every((s: { id: number }) => ![15, 16].includes(s.id)) &&
+            l.slots.every((s: { id: number }) => s.id !== 15) &&
             l.waiverWire.players.every(
-              (p: { position: string }) => p.position !== 'D/ST',
+              (p: { position: string }) => p.position !== 'IDP',
             ),
         );
       }),
     )
     .toBe(true);
   await page.getByRole('button', { name: /^Trade lab/ }).click();
-  await expect(page.getByText('Hidden Team Defense')).toHaveCount(0);
+  await expect(
+    page.getByText('Visible Team Defense', { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText('Hidden Defensive Player')).toHaveCount(0);
+});
+
+test('players page lists projections, filters the league pool, and sorts missing values last', async ({
+  page,
+}) => {
+  await page.addInitScript((demo) => {
+    const league = structuredClone(demo);
+    league.teams[0].players[0].ros = null;
+    league.teams[0].players[0].projectionSource = 'unavailable';
+    league.teams[0].players[1].ros = 0;
+    localStorage.setItem(
+      'sunday-league-v1',
+      JSON.stringify({ league, original: league, myTeamId: 1 }),
+    );
+  }, demoLeague);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Players', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Players', exact: true }),
+  ).toBeVisible();
+  const rows = page.locator('.players-table tbody tr');
+  const count = new Set(
+    [
+      ...demoLeague.teams.flatMap((t) => t.players),
+      ...demoLeague.waiverWire!.players,
+    ].map((p) => p.id),
+  ).size;
+  await expect(rows).toHaveCount(Math.min(100, count));
+  await page.getByLabel('Player roster filter').selectOption('1');
+  await expect(rows).toHaveCount(demoLeague.teams[0].players.length);
+  await expect(rows.last()).toContainText('Josh Allen');
+  await page.getByRole('button', { name: 'ROS proj.', exact: true }).click();
+  await expect(rows.first()).toContainText(demoLeague.teams[0].players[1].name);
+  await expect(rows.first()).toContainText('0.0');
+  await expect(rows.last()).toContainText('Josh Allen');
+  await page
+    .getByRole('textbox', { name: 'Search players' })
+    .fill('Josh Allen');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText('24.8');
+  await expect(rows).toContainText('Unavailable');
+  await page
+    .getByRole('main')
+    .getByRole('button', { name: 'Projection settings', exact: true })
+    .click();
+  const dialog = page.getByRole('dialog', { name: 'Projection settings' });
+  await dialog.locator('input[type=file]').setInputFiles({
+    name: 'players.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('player_id,ros_points\n3918298,500'),
+  });
+  await expect(dialog).not.toBeVisible();
+  await expect(rows).toContainText('500.0');
+  await expect(rows).toContainText('Custom');
+  await page.getByRole('button', { name: 'Clear search', exact: true }).click();
+  await page.getByLabel('Player roster filter').selectOption('available');
+  await expect(rows).toHaveCount(demoLeague.waiverWire!.players.length);
+  await page.getByRole('button', { name: 'RB', exact: true }).click();
+  await expect(rows).toHaveCount(
+    demoLeague.waiverWire!.players.filter((p) => p.position === 'RB').length,
+  );
+  await page
+    .getByRole('textbox', { name: 'Search players' })
+    .fill('not a player');
+  await expect(
+    page.getByText('No players found', { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Clear filters', exact: true })
+    .click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test('two-for-one plans and optional pickups survive review and period changes', async ({
+  page,
+}) => {
+  await page.addInitScript((demo) => {
+    const make = (id: number, ros: number, slot: number) => ({
+      ...demo.teams[0].players[0],
+      id,
+      name: `Trade Player ${id}`,
+      ros,
+      position: slot === 2 ? 'RB' : 'WR',
+      weekly: ros / 4,
+      weeklyProjections: {},
+      byeWeek: 0,
+      projectionSource: 'estimate',
+      status: 'ACTIVE',
+      slotId: 20,
+      eligibleSlots: [slot],
+    });
+    const league = {
+      ...demo,
+      week: 1,
+      finalWeek: 4,
+      playoffStartWeek: 3,
+      slots: [
+        { id: 2, label: 'RB', count: 1 },
+        { id: 4, label: 'WR', count: 1 },
+      ],
+      teams: [
+        {
+          ...demo.teams[0],
+          players: [make(1, 100, 2), make(2, 90, 2), make(3, 40, 4)],
+        },
+        {
+          ...demo.teams[1],
+          players: [make(4, 40, 2), make(5, 100, 4), make(6, 30, 4)],
+        },
+      ],
+      waiverWire: {
+        syncedAt: '',
+        truncated: false,
+        players: [
+          { ...make(7, 60, 4), availability: 'FREEAGENT', percentOwned: 1 },
+        ],
+      },
+    };
+    localStorage.setItem(
+      'sunday-league-v1',
+      JSON.stringify({ league, original: league, myTeamId: 1 }),
+    );
+  }, demoLeague);
+  await page.goto('/');
+  await page.getByRole('button', { name: /^Trade lab/ }).click();
+  const finder = page.getByRole('region', {
+    name: 'Trade finder',
+    exact: true,
+  });
+  await finder.getByLabel('Trade size').selectOption('unequal');
+  await finder
+    .getByLabel('Include an optional free-agent pickup in the open spot')
+    .check();
+  await finder
+    .getByRole('button', { name: 'Find trades', exact: true })
+    .click();
+  await expect(finder.getByRole('status')).toContainText('improving trades');
+  const card = finder
+    .locator('.finder-card')
+    .filter({ hasText: 'Add Trade Player 7' })
+    .first();
+  await expect(card).toBeVisible();
+  await expect(card.locator('.trade-moves')).toContainText('Drop');
+  const cardMoves = await card.locator('.trade-moves').innerText();
+  const cardGains = await card
+    .locator('.finder-gains strong')
+    .allTextContents();
+  await card.getByRole('button', { name: 'Review in trade lab' }).click();
+  await expect(page.locator('.trade-picker input:checked')).toHaveCount(3);
+  const simulatorMoves = page.locator('.trade-moves').last();
+  await expect(simulatorMoves).toHaveText(cardMoves);
+  await expect(
+    page.locator('.trade-impact').first().locator('strong'),
+  ).toHaveText(cardGains[0]);
+  await expect(page.locator('.partner-impact strong')).toHaveText(cardGains[1]);
+  await expect(
+    page.getByRole('region', { name: 'Your team weekly impact' }).last(),
+  ).toContainText('Remaining season');
+  await page.getByLabel('Evaluate trades for').selectOption('next3');
+  await expect(finder.locator('.finder-card')).toHaveCount(0);
+  await expect(page.locator('.trade-results')).toContainText(
+    'Next three weeks',
+  );
+  await page.getByLabel('Evaluate trades for').selectOption('playoffs');
+  await expect(page.locator('.trade-results')).toContainText('Playoff weeks');
+  await page.getByLabel('Playoffs start in week').fill('99');
+  await expect(page.locator('.form-error[role="alert"]')).toContainText(
+    'Choose your league',
+  );
+  await page.getByLabel('Playoffs start in week').fill('3');
+  await expect(
+    page.getByRole('heading', { name: 'Your starting lineup gets stronger.' }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole('region', { name: 'Your team weekly impact' })
+    .last()
+    .getByText('See weekly starters and coverage')
+    .click();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
 });
