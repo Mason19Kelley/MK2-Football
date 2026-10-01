@@ -48,6 +48,7 @@ test('trade history import, partial coverage, export, and reload preserve the da
           ...demoLeague,
           id: '42',
           source: 'espn',
+          syncedAt: new Date().toISOString(),
           tradeHistory: history,
         },
       },

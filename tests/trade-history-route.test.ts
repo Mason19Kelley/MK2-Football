@@ -2,8 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NextRequest } from 'next/server';
 import { POST } from '../app/api/espn/route';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 test('ESPN import optionally collects history without returning session or member identifiers', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'espn-history-route-'));
+  process.env.ESPN_CONNECTION_DIR = directory;
+  t.after(async () => {
+    delete process.env.ESPN_CONNECTION_DIR;
+    await rm(directory, { recursive: true, force: true });
+  });
   const calls: string[] = [];
   t.mock.method(
     globalThis,

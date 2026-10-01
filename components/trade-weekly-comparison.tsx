@@ -1,27 +1,40 @@
 import { useMemo } from 'react';
 import { League, Player, points } from '@/lib/types';
-import { evaluateRoster } from '@/lib/weekly-trades';
+import {
+  evaluateForecastRoster,
+  ScenarioSettings,
+} from '@/lib/trade-evaluation';
 
 export function TradeWeeklyComparison({
   league,
   before,
   after,
   name,
+  scenarios,
+  streaming = true,
 }: {
   league: League;
   before: Player[];
   after: Player[];
   name: string;
+  scenarios?: ScenarioSettings;
+  streaming?: boolean;
 }) {
   const comparison = useMemo(() => {
-    const original = evaluateRoster(league, before, 'remaining');
-    const next = evaluateRoster(league, after, 'remaining');
+    const original = evaluateForecastRoster(league, before, 'remaining', {
+      scenarios,
+      streaming,
+    });
+    const next = evaluateForecastRoster(league, after, 'remaining', {
+      scenarios,
+      streaming,
+    });
     return original.weeks.map((w, i) => ({
       before: w,
       after: next.weeks[i],
       gain: next.weeks[i].total - w.total,
     }));
-  }, [league, before, after]);
+  }, [league, before, after, scenarios, streaming]);
   const changedWeeks = comparison.filter((w) => {
     const beforeIds = new Set(w.before.players.map((p) => p.id));
     return (
@@ -72,13 +85,23 @@ export function TradeWeeklyComparison({
         </span>
       </div>
       <p className="finder-note">
+        {!streaming &&
+          'Uses the planned roster with no additional future pickups. '}
+        {scenarios &&
+          'Totals are sampled outcomes under the configured assumptions; displayed starters use the base forecasts. '}
         {estimates &&
           'EST. includes evenly allocated ROS estimates or illustrative sample forecasts. '}
         {byesUnknown &&
           'Some bye weeks are unknown; those players are assumed playable. '}
         Known byes and current-week OUT / DOUBTFUL players are unavailable.
         Future injury recovery is unknown; IR stays excluded. Empty starting
-        slots score zero.
+        slots{' '}
+        {streaming
+          ? 'use the best projected eligible free agents in the imported pool; otherwise they score zero.'
+          : 'score zero.'}{' '}
+        Replacements assume an available roster spot or a bench drop and that
+        the player remains available that week.
+        {!league.waiverWire && ' Sync ESPN to load waiver replacements.'}
       </p>
       <details>
         <summary>See weekly starters and coverage</summary>
@@ -109,15 +132,29 @@ export function TradeWeeklyComparison({
                     <td>
                       {points(w.before.total)}
                       <small>
-                        {w.before.players.map((p) => p.name).join(', ') ||
-                          'No available starters'}
+                        {w.before.players
+                          .filter(
+                            (p) => !w.after.players.some((q) => q.id === p.id),
+                          )
+                          .map(
+                            (p) =>
+                              `${p.name}${w.before.replacements.some((r) => r.id === p.id) ? ` (free agent · ${points(p.weekly)} pts)` : ''}`,
+                          )
+                          .join(', ') || 'No starters removed'}
                       </small>
                     </td>
                     <td>
                       {points(w.after.total)}
                       <small>
-                        {w.after.players.map((p) => p.name).join(', ') ||
-                          'No available starters'}
+                        {w.after.players
+                          .filter(
+                            (p) => !w.before.players.some((q) => q.id === p.id),
+                          )
+                          .map(
+                            (p) =>
+                              `${p.name}${w.after.replacements.some((r) => r.id === p.id) ? ` (free agent · ${points(p.weekly)} pts)` : ''}`,
+                          )
+                          .join(', ') || 'No starters added'}
                       </small>
                     </td>
                     <td>
@@ -135,6 +172,10 @@ export function TradeWeeklyComparison({
                             ? 'EST.'
                             : 'Forecasts'}
                       </small>
+                      {(w.before.replacements.length > 0 ||
+                        w.after.replacements.length > 0) && (
+                        <small>Includes free-agent replacements</small>
+                      )}
                     </td>
                   </tr>
                 ))}

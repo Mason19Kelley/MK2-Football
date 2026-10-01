@@ -56,7 +56,7 @@ test('trade simulator updates projected lineup value and resets', async ({
     page.getByRole('region', { name: 'Your team weekly impact' }),
   ).toContainText('Next 3 weeks');
   await page.getByLabel('Evaluate trades for').selectOption('ros');
-  await expect(page.locator('.trade-impact').first()).toContainText('+73.8');
+  await expect(page.locator('.trade-impact').first()).toContainText('+66.3');
   await page.getByRole('button', { name: 'Reset trade' }).click();
   await expect(
     page.getByRole('heading', { name: 'What does the trade change?' }),
@@ -108,7 +108,9 @@ test('connect handles errors, imports data, and never persists ESPN credentials'
   const storage = await page.evaluate(() => JSON.stringify(localStorage));
   expect(storage).not.toContain('secret-session');
   expect(storage).not.toContain('secret-owner');
-  await page.getByRole('button', { name: 'Sync ESPN', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Change connection', exact: true })
+    .click();
   await dialog.getByLabel('My league is private').check();
   await expect(dialog.getByLabel('espn_s2', { exact: true })).toHaveValue('');
   await expect(dialog.getByLabel('SWID', { exact: true })).toHaveValue('');
@@ -583,9 +585,8 @@ test('two-for-one plans and optional pickups survive review and period changes',
     exact: true,
   });
   await finder.getByLabel('Trade size').selectOption('unequal');
-  await finder
-    .getByLabel('Include an optional free-agent pickup in the open spot')
-    .check();
+  await finder.getByText('Evaluation assumptions and forecast overrides').click();
+  await expect(finder.getByLabel(/Compare against each team's best no-trade/)).toBeChecked();
   await finder
     .getByRole('button', { name: 'Find trades', exact: true })
     .click();
@@ -602,7 +603,7 @@ test('two-for-one plans and optional pickups survive review and period changes',
     .allTextContents();
   await card.getByRole('button', { name: 'Review in trade lab' }).click();
   await expect(page.locator('.trade-picker input:checked')).toHaveCount(3);
-  const simulatorMoves = page.locator('.trade-moves').last();
+  const simulatorMoves = page.locator('.trade-lab-plan .trade-moves');
   await expect(simulatorMoves).toHaveText(cardMoves);
   await expect(
     page.locator('.trade-impact').first().locator('strong'),

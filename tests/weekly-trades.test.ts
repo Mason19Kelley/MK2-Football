@@ -335,7 +335,7 @@ test('pickup pruning preserves optimal choices, including players with different
   const pruned = tradePickupCandidates(league, 'remaining');
   assert.deepEqual(
     pruned.map((p) => p.id),
-    [10, 12],
+    [10, 11, 12],
   );
   const evaluate = (roster: Player[]) =>
     evaluateRoster(league, roster, 'remaining');
@@ -360,4 +360,160 @@ test('pickup pruning preserves optimal choices, including players with different
     evaluate(optimized.mine.roster).total,
   );
   assert.equal(exhaustive.mine.pickup?.id, optimized.mine.pickup?.id);
+});
+
+test('bye-week trade gains are measured against the best available free-agent replacement', async () => {
+  const mine = [
+    { ...p(1, [30, 0, 30, 30]), name: 'Lamar', byeWeek: 2 },
+    { ...p(2, [10, 10, 10, 10], [4]), position: 'WR' as const },
+    { ...p(3, [9, 9, 9, 9], [4]), position: 'WR' as const },
+  ];
+  const partner = [
+    { ...p(4, [15, 15, 15, 15]), name: 'Darnold' },
+    p(5, [25, 25, 25, 25]),
+    { ...p(6, [2, 2, 2, 2], [4]), position: 'WR' as const },
+  ];
+  const league: League = {
+    ...l(),
+    slots: [
+      { id: 0, label: 'QB', count: 1 },
+      { id: 4, label: 'WR', count: 1 },
+    ],
+    teams: [
+      { ...demoLeague.teams[0], id: 1, players: mine },
+      { ...demoLeague.teams[1], id: 2, players: partner },
+    ],
+  };
+  const options = {
+    maxPlayers: 1 as const,
+    horizon: 'remaining' as const,
+    minimumGain: 0,
+    ranking: 'mine' as const,
+  };
+  const target = (t: { send: Player[]; receive: Player[] }) =>
+    t.send[0].id === 2 && t.receive[0].id === 4;
+  assert.equal(
+    (await findTrades(league, 1, options)).candidates.find(target)?.mine.gain,
+    11,
+  );
+  const wire = (points: number) => ({
+    ...p(10, [points, points, points, points]),
+    name: 'Streamer',
+    availability: 'FREEAGENT' as const,
+    percentOwned: 1,
+  });
+  league.waiverWire = { syncedAt: '', truncated: false, players: [wire(10)] };
+  const before = evaluateRoster(league, mine, 'remaining');
+  assert.equal(before.weeks[1].total, 20);
+  assert.equal(before.weeks[1].replacements[0].name, 'Streamer');
+  assert.equal(before.weeks[0].replacements.length, 0);
+  assert.equal(
+    (await findTrades(league, 1, options)).candidates.find(target)?.mine.gain,
+    1,
+  );
+  for (const score of [15, 20]) {
+    league.waiverWire.players = [wire(score)];
+    assert.ok(!(await findTrades(league, 1, options)).candidates.some(target));
+  }
+  // The imported snapshots stay unchanged; replacements are hypothetical.
+  assert.equal(mine.length, 3);
+  assert.equal(league.waiverWire.players[0].slotId, 20);
+});
+
+test('replacement pool excludes claimed, rostered, injured, bye and missing-forecast players', () => {
+  const starter = { ...p(1, [0, 30, 30, 30]), byeWeek: 1 };
+  const free = (id: number, score: number) => ({
+    ...p(id, [score, score, score, score]),
+    availability: 'FREEAGENT' as const,
+    percentOwned: 1,
+  });
+  const league: League = {
+    ...l(),
+    teams: [{ ...demoLeague.teams[0], players: [starter, free(8, 100)] }],
+    waiverWire: {
+      syncedAt: '',
+      truncated: false,
+      players: [
+        { ...free(2, 100), availability: 'WAIVERS' },
+        { ...free(3, 100), byeWeek: 1 },
+        { ...free(4, 100), status: 'OUT' },
+        { ...free(5, 100), weekly: null, ros: null, weeklyProjections: {} },
+        { ...free(6, 100), slotId: 21 },
+        free(8, 100),
+        free(9, 12),
+        free(10, 15),
+      ],
+    },
+  };
+  const result = evaluateRoster(league, [starter], 'next3');
+  assert.equal(result.weeks[0].total, 15);
+  assert.deepEqual(
+    result.weeks[0].replacements.map((p) => p.id),
+    [10],
+  );
+  assert.equal(result.weeks[0].missing, 0);
+  assert.equal(result.weeks[0].estimated, 0);
+});
+
+test('replacement matching fills repeated and flex slots once per player while keeping owned starters', () => {
+  const roster = [
+    { ...p(1, [0, 10, 10, 10], [0, 7]), byeWeek: 1 },
+    p(2, [3, 3, 3, 3], [0, 7]),
+  ];
+  const league: League = {
+    ...l(),
+    slots: [
+      { id: 0, label: 'QB', count: 2 },
+      { id: 7, label: 'OP', count: 1 },
+    ],
+    waiverWire: {
+      syncedAt: '',
+      truncated: false,
+      players: [
+        {
+          ...p(10, [20, 20, 20, 20], [0, 7]),
+          availability: 'FREEAGENT',
+          percentOwned: 1,
+        },
+        {
+          ...p(11, [15, 15, 15, 15], [0, 7]),
+          availability: 'FREEAGENT',
+          percentOwned: 1,
+        },
+        {
+          ...p(12, [12, 12, 12, 12], [0, 7]),
+          availability: 'FREEAGENT',
+          percentOwned: 1,
+        },
+      ],
+    },
+  };
+  const week = evaluateRoster(league, roster, 'next3').weeks[0];
+  assert.equal(week.total, 38);
+  assert.equal(week.filled, 3);
+  assert.deepEqual(
+    week.players.map((p) => p.id),
+    [2, 10, 11],
+  );
+  assert.equal(new Set(week.players.map((p) => p.id)).size, 3);
+});
+
+test('missing waiver pools retain zero-point gaps and ROS legacy totals remain unchanged', () => {
+  const starter = { ...p(1, [0, 20, 20, 20]), byeWeek: 1 };
+  assert.equal(evaluateRoster(l(), [starter], 'next3').weeks[0].total, 0);
+  const league: League = {
+    ...l(),
+    waiverWire: {
+      syncedAt: '',
+      truncated: false,
+      players: [
+        {
+          ...p(10, [15, 15, 15, 15]),
+          availability: 'FREEAGENT',
+          percentOwned: 1,
+        },
+      ],
+    },
+  };
+  assert.equal(evaluateRoster(league, [starter], 'ros').total, 60);
 });

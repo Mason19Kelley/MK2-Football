@@ -8,3 +8,6 @@ test-results/
 
 # Local ESPN trade datasets
 /data/trade-history/
+
+# Encrypted ESPN connections and local encryption key
+/data/espn-connections/

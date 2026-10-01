@@ -18,6 +18,7 @@ function player(id: number, ros: number, slot: number): Player {
 function fixture(): League {
   return {
     ...demoLeague,
+    waiverWire: undefined,
     slots: [
       { id: 2, label: 'RB', count: 1 },
       { id: 4, label: 'WR', count: 1 },

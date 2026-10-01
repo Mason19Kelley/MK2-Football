@@ -6,9 +6,15 @@ export type WeekLineup = ReturnType<typeof optimalLineup> & {
   week: number;
   estimated: number;
   unknownByes: number;
+  replacements: Player[];
 };
 export type TradeEvaluation = ReturnType<typeof optimalLineup> & {
   weeks: WeekLineup[];
+  upperTotal?: number;
+  scenarioTotals?: number[];
+  scenarioWeeks?: Record<number, number[]>;
+  bounded?: boolean;
+  usedPlayerIds?: number[];
 };
 export const horizonLabels: Record<TradeHorizon, string> = {
   ros: 'Season-total lineup (legacy)',
@@ -49,11 +55,20 @@ export function playerWeek(p: Player, league: League, week: number) {
         p.status,
       ));
   if (unavailable) return { points: 0, estimated: false, unavailable: true };
+  if (Number.isFinite(p.weeklyOverrides?.[week]))
+    return {
+      points: p.weeklyOverrides![week],
+      estimated: false,
+      unavailable: false,
+    };
   const weeks = Array.from(
     { length: Math.max(0, league.finalWeek - league.week + 1) },
     (_, i) => league.week + i,
   );
-  const forecasts: Record<number, number> = { ...p.weeklyProjections };
+  const forecasts: Record<number, number> = {
+    ...p.weeklyProjections,
+    ...p.weeklyOverrides,
+  };
   if (forecasts[league.week] === undefined && p.weekly !== null)
     forecasts[league.week] = p.weekly;
   const forecast = forecasts[week];
@@ -94,9 +109,26 @@ export function evaluateRoster(
   roster: Player[],
   horizon: TradeHorizon,
   projectionCache?: Map<number, Map<number, ReturnType<typeof playerWeek>>>,
+  replacementCache?: Map<number, Player[]>,
+  options: { streaming?: boolean } = {},
 ): TradeEvaluation {
   const base = optimalLineup(roster, league.slots);
   if (horizon === 'ros') return { ...base, weeks: [] };
+  const projectedPlayer = (
+    p: Player,
+    value: ReturnType<typeof playerWeek>,
+  ): Player => {
+    // Forecasts are immutable during a search. Share the same projected player
+    // objects across roster assignments instead of cloning every week/roster.
+    const cached = value as ReturnType<typeof playerWeek> & {
+      projected?: Player;
+    };
+    return (cached.projected ??= {
+      ...p,
+      weekly: value.points,
+      eligibleSlots: value.unavailable ? [] : p.eligibleSlots,
+    });
+  };
   const weeks = horizonWeeks(league, horizon).map((week) => {
     const values = roster.map((p) => {
       let byWeek = projectionCache?.get(p.id);
@@ -111,25 +143,67 @@ export function evaluateRoster(
       }
       return { p, value };
     });
-    const lineup = optimalLineup(
-      values.map(({ p, value }) => ({
-        ...p,
-        weekly: value.points,
-        eligibleSlots: value.unavailable ? [] : p.eligibleSlots,
-      })),
+    let lineup = optimalLineup(
+      values.map(({ p, value }) => projectedPlayer(p, value)),
       league.slots,
       'weekly',
     );
+    let replacements: Player[] = [];
+    if (!lineup.complete && league.waiverWire && options.streaming !== false) {
+      let candidates = replacementCache?.get(week);
+      if (!candidates) {
+        candidates = weeklyReplacementCandidates(league, week);
+        replacementCache?.set(week, candidates);
+      }
+      const rosterIds = new Set(roster.map((p) => p.id));
+      const available = candidates.filter((p) => !rosterIds.has(p.id));
+      if (available.length) {
+        const owned = values.map(({ p, value }) => projectedPlayer(p, value));
+        const all = [...owned, ...available];
+        // First maximize coverage, then retain as many owned starters as possible,
+        // then maximize real projected points. Free agents only cover vacancies.
+        const bonus =
+          1 + all.reduce((sum, p) => sum + Math.abs(p.weekly ?? 0), 0);
+        const supplemented = optimalLineup(
+          all.map((p) => ({
+            ...p,
+            weekly:
+              p.weekly === null
+                ? null
+                : p.weekly + (rosterIds.has(p.id) ? bonus : 0),
+          })),
+          league.slots,
+          'weekly',
+        );
+        const actual = new Map(all.map((p) => [p.id, p]));
+        const players = supplemented.players.map((p) => actual.get(p.id)!);
+        lineup = {
+          ...supplemented,
+          players,
+          total: players.reduce((sum, p) => sum + (p.weekly ?? 0), 0),
+        };
+        replacements = players.filter((p) => !rosterIds.has(p.id));
+      }
+    }
     const selected = new Set(lineup.players.map((p) => p.id));
     return {
       ...lineup,
       week,
-      estimated: values.filter(
-        ({ p, value }) => selected.has(p.id) && value.estimated,
-      ).length,
-      unknownByes: values.filter(
-        ({ p }) => selected.has(p.id) && p.byeWeek === undefined,
-      ).length,
+      replacements,
+      estimated:
+        values.filter(({ p, value }) => selected.has(p.id) && value.estimated)
+          .length +
+        replacements.filter(
+          (p) =>
+            playerWeek(
+              league.waiverWire!.players.find((q) => q.id === p.id)!,
+              league,
+              week,
+            ).estimated,
+        ).length,
+      unknownByes:
+        values.filter(({ p }) => selected.has(p.id) && p.byeWeek === undefined)
+          .length + replacements.filter((p) => p.byeWeek === undefined).length,
       missing: values.filter(
         ({ p, value }) => p.slotId !== 21 && value.points === null,
       ).length,
@@ -149,4 +223,42 @@ export function evaluateRoster(
       ).complete,
     weeks,
   };
+}
+
+// Players with the same starting eligibility are interchangeable for a single
+// week. Keep enough of the strongest to fill every slot, including repeated QB
+// slots and superflex, rather than adding thousands of free agents to matching.
+export function weeklyReplacementCandidates(
+  league: League,
+  week: number,
+): Player[] {
+  const rostered = new Set(
+    league.teams.flatMap((t) => t.players.map((p) => p.id)),
+  );
+  const starting = new Set(league.slots.map((s) => s.id));
+  const count = league.slots.reduce((sum, s) => sum + s.count, 0);
+  const groups = new Map<string, Player[]>();
+  const seen = new Set<number>();
+  for (const p of league.waiverWire?.players ?? []) {
+    if (
+      p.availability !== 'FREEAGENT' ||
+      p.slotId === 21 ||
+      rostered.has(p.id) ||
+      seen.has(p.id)
+    )
+      continue;
+    seen.add(p.id);
+    const eligibility = [
+      ...new Set(p.eligibleSlots.filter((s) => starting.has(s))),
+    ].sort((a, b) => a - b);
+    const value = playerWeek(p, league, week);
+    if (!eligibility.length || value.unavailable || value.points === null)
+      continue;
+    const key = eligibility.join(',');
+    const group = groups.get(key) ?? [];
+    group.push({ ...p, slotId: 20, slot: 'BN', weekly: value.points });
+    group.sort((a, b) => b.weekly! - a.weekly! || a.id - b.id);
+    groups.set(key, group.slice(0, count));
+  }
+  return [...groups.values()].flat();
 }

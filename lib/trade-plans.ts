@@ -1,117 +1,291 @@
-import { League, Player } from './types';
+import { League, Player, Team } from './types';
 import { applyTrade, optimalLineup } from './trades';
 import { horizonWeeks, playerWeek, TradeHorizon } from './weekly-trades';
 
-export type RosterEvaluation = ReturnType<typeof optimalLineup>;
+export type RosterEvaluation = ReturnType<typeof optimalLineup> & {
+  upperTotal?: number;
+  usedPlayerIds?: number[];
+};
 export type RosterMove = {
   roster: Player[];
   drop?: Player;
+  drops?: Player[];
   pickup?: Player;
   openSpots: number;
   capacitySource: 'league' | 'snapshot';
 };
 export type TradePlan = { mine: RosterMove; partner: RosterMove };
+export type MoveOptions = {
+  includePickup?: boolean;
+  evaluate?: (players: Player[]) => RosterEvaluation;
+  evaluatePartner?: (players: Player[]) => RosterEvaluation;
+  pickupCandidates?: Player[];
+  signal?: AbortSignal;
+  preserveVariants?: boolean;
+  pruneUnusedDrops?: boolean;
+};
 
-// Use imported non-IR capacity, or the current roster count as a conservative fallback.
-// Newly dropped players are not available for an immediate pickup by the other side.
+export function compareRosterMoves(
+  a: RosterMove,
+  b: RosterMove,
+  evaluate: (players: Player[]) => RosterEvaluation,
+  upper = false,
+) {
+  const av = evaluate(a.roster),
+    bv = evaluate(b.roster);
+  return (
+    Number(bv.complete && bv.missing === 0) -
+      Number(av.complete && av.missing === 0) ||
+    (upper ? (bv.upperTotal ?? bv.total) : bv.total) -
+      (upper ? (av.upperTotal ?? av.total) : av.total) ||
+    Number(Boolean(a.pickup)) - Number(Boolean(b.pickup)) ||
+    (a.drops ?? []).reduce((s, p) => s + (p.ros ?? 0), 0) -
+      (b.drops ?? []).reduce((s, p) => s + (p.ros ?? 0), 0) ||
+    (a.pickup?.id ?? a.drop?.id ?? 0) - (b.pickup?.id ?? b.drop?.id ?? 0)
+  );
+}
+
+// Enumerate at most one immediate acquisition, plus required capacity drops.
+// Incoming players are protected. Imported locks/limits apply when present.
+export function rosterMoveCandidates(
+  league: League,
+  team: Team,
+  roster: Player[],
+  incoming: number[] = [],
+  options: MoveOptions = {},
+): RosterMove[] {
+  const count = (players: Player[]) =>
+    players.filter((p) => p.slotId !== 21).length;
+  const capacity = team.rosterCapacity ?? count(team.players);
+  const excess = count(roster) - capacity;
+  if (excess > 1)
+    throw new Error('Choose trades with at most one extra player per team.');
+  const rostered = new Set(
+    league.teams.flatMap((t) => t.players.map((p) => p.id)),
+  );
+  const available =
+    options.pickupCandidates ?? league.waiverWire?.players ?? [];
+  const droppable = roster.filter(
+    (p) => p.slotId !== 21 && !incoming.includes(p.id) && !p.transactionLocked,
+  );
+  const legal = (players: Player[]) =>
+    count(players) <= capacity &&
+    Object.entries(league.positionLimits ?? {}).every(
+      ([position, limit]) =>
+        players.filter((p) => p.slotId !== 21 && p.position === position)
+          .length <= limit!,
+    );
+  const variants: RosterMove[] = [];
+  const evaluate: (players: Player[]) => RosterEvaluation =
+    options.evaluate ??
+    ((players: Player[]) => optimalLineup(players, league.slots));
+  function add(pickup?: Player) {
+    options.signal?.throwIfAborted();
+    const required = Math.max(0, excess + Number(Boolean(pickup)));
+    const drops: Player[][] =
+      required === 0
+        ? [[]]
+        : required === 1
+          ? droppable.map((p) => [p])
+          : droppable.flatMap((p, i) =>
+              droppable.slice(i + 1).map((q) => [p, q]),
+            );
+    let retainedDrops = drops;
+    if (required > 0 && options.pruneUnusedDrops && !options.preserveVariants) {
+      const unrestricted = pickup
+        ? [...roster, { ...pickup, slotId: 20, slot: 'BN' }]
+        : roster;
+      const value = evaluate(unrestricted);
+      if (value.complete && value.missing === 0 && value.usedPlayerIds) {
+        const used = new Set(value.usedPlayerIds);
+        const equivalent = drops.filter(
+          (removed) =>
+            removed.every((p) => !used.has(p.id)) &&
+            legal(
+              unrestricted.filter((p) => !removed.some((q) => q.id === p.id)),
+            ),
+        );
+        // Removing players unused in every evaluated week attains the full
+        // roster's upper bound. Keep the strongest depth on exact ties.
+        if (equivalent.length) {
+          const depth = (removed: Player[]) =>
+            removed.reduce((sum, p) => sum + (p.ros ?? 0), 0);
+          const best = equivalent.sort((a, b) => depth(a) - depth(b))[0];
+          retainedDrops = [
+            best,
+            ...drops.filter(
+              (removed) => removed !== best && depth(removed) <= depth(best),
+            ),
+          ];
+        }
+      }
+    }
+    for (const removed of retainedDrops) {
+      const next = roster.filter((p) => !removed.some((q) => q.id === p.id));
+      if (pickup) next.push({ ...pickup, slotId: 20, slot: 'BN' });
+      if (legal(next))
+        variants.push({
+          roster: next,
+          drop: removed[0],
+          drops: removed,
+          pickup,
+          openSpots: capacity - count(next),
+          capacitySource:
+            team.rosterCapacity === undefined ? 'snapshot' : 'league',
+        });
+    }
+  }
+  add();
+  if (options.includePickup && team.acquisitionsRemaining !== 0) {
+    const seen = new Set<number>();
+    for (const p of available) {
+      if (
+        seen.has(p.id) ||
+        rostered.has(p.id) ||
+        roster.some((q) => q.id === p.id) ||
+        p.slotId === 21 ||
+        p.transactionLocked
+      )
+        continue;
+      if (
+        !league.waiverWire?.players.some(
+          (q) => q.id === p.id && q.availability === 'FREEAGENT',
+        )
+      )
+        continue;
+      seen.add(p.id);
+      add(p);
+    }
+  }
+  if (!variants.length)
+    throw new Error(
+      'No eligible player can be dropped to make room or meet roster limits.',
+    );
+  if (options.preserveVariants) return variants;
+  // A drop variant with the same acquisition can be discarded after exact evaluation.
+  // Keep the upper-bound optimum separately when bounded forecasts are in use.
+  const groups = new Map<number, RosterMove[]>();
+  for (const move of variants) {
+    const key = move.pickup?.id ?? 0;
+    const previous = groups.get(key) ?? [];
+    const pool = [...previous, move];
+    const lower = [...pool].sort((a, b) =>
+      compareRosterMoves(a, b, evaluate),
+    )[0];
+    const upper = [...pool].sort((a, b) =>
+      compareRosterMoves(a, b, evaluate, true),
+    )[0];
+    groups.set(key, lower === upper ? [lower] : [lower, upper]);
+  }
+  return [...groups.values()].flat();
+}
+
+export function bestNoTradeMove(
+  league: League,
+  team: Team,
+  options: MoveOptions = {},
+) {
+  const evaluate: (players: Player[]) => RosterEvaluation =
+    options.evaluate ?? ((players) => optimalLineup(players, league.slots));
+  const moves = rosterMoveCandidates(league, team, team.players, [], options);
+  const move = [...moves].sort((a, b) => compareRosterMoves(a, b, evaluate))[0];
+  const upper = Math.max(
+    ...moves.map(
+      (m) => evaluate(m.roster).upperTotal ?? evaluate(m.roster).total,
+    ),
+  );
+  return {
+    move,
+    evaluation: {
+      ...evaluate(move.roster),
+      // Dropping an unbounded unknown cannot prove that the no-trade optimum
+      // was weak. Require bounds until the original lineup is evaluable too.
+      missing: Math.max(
+        evaluate(move.roster).missing,
+        evaluate(team.players).missing,
+      ),
+      upperTotal: upper,
+    },
+  };
+}
+
 export function planTrade(
   league: League,
   mine: Player[],
   partner: Player[],
   send: number[],
   receive: number[],
-  options: {
-    includePickup?: boolean;
-    evaluate?: (players: Player[]) => RosterEvaluation;
-    pickupCandidates?: Player[];
+  options: MoveOptions & {
+    comparePlans?: (a: TradePlan, b: TradePlan) => number;
   } = {},
 ): TradePlan {
+  if (league.tradesLocked)
+    throw new Error('Trades are locked for this league.');
+  if (
+    [
+      ...mine.filter((p) => send.includes(p.id)),
+      ...partner.filter((p) => receive.includes(p.id)),
+    ].some((p) => p.transactionLocked)
+  )
+    throw new Error('A selected player is transaction locked.');
   const evaluate =
     options.evaluate ?? ((players) => optimalLineup(players, league.slots));
   const swapped = applyTrade(mine, partner, send, receive);
-  const rostered = new Set(
-    league.teams.flatMap((t) => t.players.map((p) => p.id)),
+  const team = (players: Player[]) =>
+    league.teams.find((t) => t.players === players) ?? {
+      ...league.teams[0],
+      players,
+      rosterCapacity: undefined,
+    };
+  const myMoves = rosterMoveCandidates(
+    league,
+    team(mine),
+    swapped.mine,
+    receive,
+    options,
   );
-  const available =
-    options.pickupCandidates ??
-    (league.waiverWire?.players ?? []).filter(
-      (p) =>
-        p.availability === 'FREEAGENT' &&
-        !rostered.has(p.id) &&
-        p.slotId !== 21,
-    );
-  const count = (players: Player[]) =>
-    players.filter((p) => p.slotId !== 21).length;
-  const choose = (
-    original: Player[],
-    roster: Player[],
-    incoming: number[],
-  ): RosterMove => {
-    const importedCapacity = league.teams.find(
-      (t) => t.players === original,
-    )?.rosterCapacity;
-    const capacity = importedCapacity ?? count(original);
-    const capacitySource =
-      importedCapacity === undefined
-        ? ('snapshot' as const)
-        : ('league' as const);
-    const delta = count(roster) - count(original);
-    const excess = count(roster) - capacity;
-    // Finder supports at most two players on either side. Manual larger swaps
-    // remain visible, but are not presented as actionable without a complete plan.
-    if (excess > 1)
-      throw new Error('Choose trades with at most one extra player per team.');
-    let variants: RosterMove[] = [
-      { roster, openSpots: Math.max(0, -excess), capacitySource },
-    ];
-    if (excess === 1) {
-      variants = roster
-        .filter((p) => p.slotId !== 21 && !incoming.includes(p.id))
-        .map((drop) => ({
-          roster: roster.filter((p) => p.id !== drop.id),
-          drop,
-          openSpots: 0,
-          capacitySource,
-        }));
-      if (!variants.length)
-        throw new Error('No eligible player can be dropped to make room.');
-    } else if (delta === -1 && excess < 0 && options.includePickup) {
-      variants.push(
-        ...available.map((pickup) => ({
-          roster: [...roster, { ...pickup, slotId: 20, slot: 'BN' }],
-          pickup,
-          openSpots: Math.max(0, -excess - 1),
-          capacitySource,
-        })),
+  const evaluatePartner = options.evaluatePartner ?? evaluate;
+  const theirMoves = rosterMoveCandidates(
+    league,
+    team(partner),
+    swapped.theirs,
+    send,
+    { ...options, evaluate: evaluatePartner },
+  );
+  const compare =
+    options.comparePlans ??
+    ((a, b) => {
+      const valid = (p: TradePlan) =>
+        [evaluate(p.mine.roster), evaluatePartner(p.partner.roster)].every(
+          (v) => v.complete && v.missing === 0,
+        );
+      return (
+        Number(valid(b)) - Number(valid(a)) ||
+        evaluate(b.mine.roster).total +
+          evaluatePartner(b.partner.roster).total -
+          evaluate(a.mine.roster).total -
+          evaluatePartner(a.partner.roster).total ||
+        compareRosterMoves(a.mine, b.mine, evaluate) ||
+        compareRosterMoves(a.partner, b.partner, evaluatePartner)
       );
+    });
+  let best: TradePlan | undefined;
+  for (const myMove of myMoves)
+    for (const theirMove of theirMoves) {
+      options.signal?.throwIfAborted();
+      if (myMove.pickup && myMove.pickup.id === theirMove.pickup?.id) continue;
+      const plan = { mine: myMove, partner: theirMove };
+      if (!best || compare(plan, best) < 0) best = plan;
     }
-    const scored = variants.map((move) => ({
-      move,
-      value: evaluate(move.roster),
-    }));
-    scored.sort(
-      (a, b) =>
-        Number(b.value.complete && b.value.missing === 0) -
-          Number(a.value.complete && a.value.missing === 0) ||
-        b.value.total - a.value.total ||
-        // Preserve stronger depth for tied starting totals; don't add a player
-        // solely to fill an empty bench spot when it has no lineup benefit.
-        (a.move.pickup ? 1 : 0) - (b.move.pickup ? 1 : 0) ||
-        (a.move.drop?.ros ?? 0) - (b.move.drop?.ros ?? 0) ||
-        (a.move.drop?.id ?? a.move.pickup?.id ?? 0) -
-          (b.move.drop?.id ?? b.move.pickup?.id ?? 0),
+  if (!best)
+    throw new Error(
+      'No eligible player can be dropped to produce a joint roster plan.',
     );
-    return scored[0].move;
-  };
-  return {
-    mine: choose(mine, swapped.mine, receive),
-    partner: choose(partner, swapped.theirs, send),
-  };
+  return best;
 }
 
-// Retain the Pareto frontier for each starting-slot eligibility group. A pickup
-// worse in every selected week can never improve a lineup more than its peer.
-// This avoids evaluating thousands of dominated free agents for every package.
+// Keep two dominating peers: the other team may acquire the strongest one.
+// Bounded or stochastic forecasts disable this deterministic pruning.
 export function tradePickupCandidates(
   league: League,
   horizon: TradeHorizon,
@@ -127,6 +301,7 @@ export function tradePickupCandidates(
     if (
       player.availability !== 'FREEAGENT' ||
       player.slotId === 21 ||
+      player.transactionLocked ||
       rostered.has(player.id)
     )
       continue;
@@ -145,13 +320,22 @@ export function tradePickupCandidates(
       scores: points as number[],
       available: horizon === 'ros' ? [true] : values.map((v) => !v.unavailable),
     };
-    const dominates = (a: Entry, b: Entry) =>
-      a.scores.every(
-        (n, i) => n >= b.scores[i] && (a.available[i] || !b.available[i]),
-      );
-    const previous = groups.get(key) ?? [];
-    if (previous.some((p) => dominates(p, entry))) continue;
-    groups.set(key, [...previous.filter((p) => !dominates(entry, p)), entry]);
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
   }
-  return [...groups.values()].flat().map((entry) => entry.player);
+  const dominates = (a: Entry, b: Entry) =>
+    a.scores.every(
+      (n, i) => n >= b.scores[i] && (a.available[i] || !b.available[i]),
+    ) &&
+    (a.scores.some((n, i) => n > b.scores[i]) || a.player.id < b.player.id);
+  return [...groups.values()]
+    .flatMap((group) =>
+      group.filter((entry) => {
+        let dominators = 0;
+        for (const peer of group) {
+          if (dominates(peer, entry) && ++dominators === 2) return false;
+        }
+        return true;
+      }),
+    )
+    .map((e) => e.player);
 }

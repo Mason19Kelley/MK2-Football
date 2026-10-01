@@ -1,4 +1,9 @@
-import { normalizePlayer, RawPlayer, isSupportedPlayer } from './espn';
+import {
+  normalizePlayer,
+  RawPlayer,
+  isSupportedPlayer,
+  seasonStatsFilter,
+} from './espn';
 import { League, WaiverPlayer, WaiverWire, Player } from './types';
 import { optimalLineup } from './trades';
 export type RawWaiverEntry = {
@@ -60,6 +65,7 @@ export async function fetchWaiverWire(
         ...headers,
         'x-fantasy-filter': JSON.stringify({
           players: {
+            ...seasonStatsFilter(),
             filterStatus: { value: ['FREEAGENT', 'WAIVERS'] },
             filterActive: { value: true },
             limit: pageSize,

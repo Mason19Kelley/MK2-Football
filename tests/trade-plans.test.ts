@@ -55,7 +55,11 @@ test('two-for-one plans enforce a drop and optionally fill the open spot with a 
     [5],
     { includePickup: true },
   );
-  assert.equal(plan.partner.drop?.id, 6);
+  assert.deepEqual(
+    plan.partner.drops?.map((p) => p.id),
+    [4, 6],
+  );
+  assert.equal(plan.partner.pickup?.id, 7);
   assert.equal(plan.partner.roster.length, 3);
   assert.equal(plan.mine.openSpots, 1);
   // A bench pickup with no starting gain is not required.

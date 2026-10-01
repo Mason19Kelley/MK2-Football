@@ -16,7 +16,7 @@ export type RawPlayer = {
   injuryStatus?: string;
   byeWeek?: number;
   stats?: Stats[];
-  ownership?: { percentOwned?: number };
+  ownership?: { percentOwned?: number; percentStarted?: number };
 };
 type RawTeam = {
   id: number;
@@ -62,6 +62,12 @@ export type ESPNResponse = {
     lastName?: string;
   }[];
   teams?: RawTeam[];
+  schedule?: {
+    id?: number;
+    matchupPeriodId?: number;
+    home?: { teamId?: number };
+    away?: { teamId?: number };
+  }[];
 };
 const nfl: Record<number, string> = {
   1: 'ATL',
@@ -111,6 +117,94 @@ export const isSupportedPlayer = (p: RawPlayer) =>
 function finite(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
+function weeklyPoints(stats: Stats[], source: number): Record<number, number> {
+  return Object.fromEntries(
+    stats
+      .filter(
+        (s) =>
+          s.statSourceId === source &&
+          s.statSplitTypeId === 1 &&
+          Number.isInteger(s.scoringPeriodId) &&
+          s.scoringPeriodId! >= 1 &&
+          s.scoringPeriodId! <= 18 &&
+          finite(s.appliedTotal) !== null,
+      )
+      .map((s) => [s.scoringPeriodId!, s.appliedTotal!]),
+  );
+}
+
+// Request all available weekly splits, plus season totals, in league scoring.
+export function seasonStatsFilter() {
+  return {
+    filterStatsForScoringPeriodIds: {
+      value: Array.from({ length: 19 }, (_, week) => week),
+    },
+    filterStatsForSourceIds: { value: [0, 1] },
+  };
+}
+
+export async function enrichRosterStats(
+  leagueUrl: URL,
+  headers: Record<string, string>,
+  league: League,
+): Promise<void> {
+  const players = league.teams.flatMap((team) => team.players);
+  if (!players.length) return;
+  const url = new URL(leagueUrl);
+  url.searchParams.delete('view');
+  url.searchParams.set('view', 'kona_playercard');
+  url.searchParams.set('scoringPeriodId', String(league.week));
+  const response = await fetch(url, {
+    headers: {
+      ...headers,
+      'x-fantasy-filter': JSON.stringify({
+        players: {
+          filterIds: { value: players.map((p) => p.id) },
+          ...seasonStatsFilter(),
+        },
+      }),
+    },
+    cache: 'no-store',
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('Player season stats unavailable.');
+  const data = await response.json();
+  if (!Array.isArray(data.players)) throw new Error('Missing player stats.');
+  const rawPlayers = new Map<number, RawPlayer>(
+    data.players
+      .filter((entry: { player?: RawPlayer }) => entry.player)
+      .map((entry: { player: RawPlayer }) => [entry.player.id, entry.player]),
+  );
+  for (const player of players) {
+    const raw = rawPlayers.get(player.id);
+    if (!raw) continue;
+    const normalized = normalizePlayer(
+      raw,
+      league.season,
+      league.week,
+      league.finalWeek,
+      player.slotId,
+    );
+    player.weeklyProjections = {
+      ...player.weeklyProjections,
+      ...normalized.weeklyProjections,
+    };
+    player.weeklyActuals = {
+      ...player.weeklyActuals,
+      ...normalized.weeklyActuals,
+    };
+    player.percentOwned = normalized.percentOwned;
+    player.percentStarted = normalized.percentStarted;
+    if (normalized.season !== null) player.season = normalized.season;
+    if (normalized.actual !== null) player.actual = normalized.actual;
+    if (normalized.weekly !== null) player.weekly = normalized.weekly;
+    if (normalized.ros !== null) {
+      player.ros = normalized.ros;
+      player.projectionSource = normalized.projectionSource;
+    }
+  }
+}
+
 export function normalizePlayer(
   p: RawPlayer,
   season: number,
@@ -186,7 +280,10 @@ export function normalizePlayer(
     season: seasonPoints,
     actual,
     projectionSource,
-    weeklyProjections: Object.fromEntries(future),
+    weeklyProjections: weeklyPoints(stats, 1),
+    weeklyActuals: weeklyPoints(stats, 0),
+    percentOwned: finite(p.ownership?.percentOwned),
+    percentStarted: finite(p.ownership?.percentStarted),
     ...(p.byeWeek !== undefined ? { byeWeek: p.byeWeek } : {}),
   };
 }
@@ -294,6 +391,17 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
     : (schedule?.matchupPeriodCount ?? 0) *
       (schedule?.matchupPeriodLength ?? 1);
   return {
+    ...(raw.schedule ? {
+      matchups: raw.schedule.flatMap((matchup, index) => {
+        const period = matchup.matchupPeriodId;
+        const homeId = matchup.home?.teamId, awayId = matchup.away?.teamId;
+        if (!Number.isInteger(period) || !Number.isInteger(homeId) || !Number.isInteger(awayId)) return [];
+        const length = schedule?.matchupPeriodLength ?? 1;
+        const weeks = schedule?.matchupPeriods?.[String(period)]
+          ?? Array.from({ length }, (_, offset) => (period! - 1) * length + offset + 1);
+        return [{ id: matchup.id ?? index, weeks, homeId: homeId!, awayId: awayId! }];
+      }),
+    } : {}),
     ...(regularEnd > 0 && regularEnd < finalWeek
       ? { playoffStartWeek: regularEnd + 1 }
       : {}),

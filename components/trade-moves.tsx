@@ -19,7 +19,13 @@ export function TradeMoves({
           (move.drop || move.pickup || move.openSpots > 0) && (
             <p key={name}>
               <strong>{name}:</strong>{' '}
-              {move.drop && <>Drop {move.drop.name} to make room. </>}
+              {move.drop && (
+                <>
+                  Drop{' '}
+                  {(move.drops ?? [move.drop]).map((p) => p.name).join(', ')} to
+                  make room.{' '}
+                </>
+              )}
               {move.pickup && (
                 <>Add {move.pickup.name} from free agents (optional). </>
               )}

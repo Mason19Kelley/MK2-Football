@@ -4,22 +4,67 @@ import {
   parseLeagueId,
   ESPNResponse,
   enrichByeWeeks,
+  enrichRosterStats,
 } from '@/lib/espn';
 import { fetchTradeHistory } from '@/lib/trade-history';
 import { fetchWaiverWire } from '@/lib/waivers';
 import { isAllowedRequestOrigin } from '@/lib/request-origin';
+import {
+  CONNECTION_COOKIE,
+  CONNECTION_MAX_AGE,
+  loadConnection,
+  saveConnection,
+  deleteConnection,
+} from '@/lib/espn-connection';
 export const runtime = 'nodejs';
+
+export async function DELETE(request: NextRequest) {
+  if (!isAllowedRequestOrigin(request.headers, request.url))
+    return NextResponse.json(
+      { error: 'Cross-origin requests are not allowed.' },
+      { status: 403 },
+    );
+  await deleteConnection(request.cookies.get(CONNECTION_COOKIE)?.value);
+  const response = NextResponse.json(
+    { disconnected: true },
+    { headers: { 'Cache-Control': 'no-store' } },
+  );
+  response.cookies.set(CONNECTION_COOKIE, '', {
+    httpOnly: true,
+    sameSite: 'strict',
+    path: '/api/espn',
+    maxAge: 0,
+  });
+  return response;
+}
 export async function POST(request: NextRequest) {
   const respond = (data: unknown, status = 200) =>
     NextResponse.json(data, {
       status,
       headers: { 'Cache-Control': 'no-store' },
     });
-  // Credentials are used only for this request, never written to storage or returned.
+  // Only an opaque connection token is returned to the browser.
   if (!isAllowedRequestOrigin(request.headers, request.url))
     return respond({ error: 'Cross-origin requests are not allowed.' }, 403);
   try {
-    const body = await request.json();
+    let body = await request.json();
+    const previousToken = request.cookies.get(CONNECTION_COOKIE)?.value;
+    if (body.refresh === true) {
+      const saved = await loadConnection(previousToken);
+      if (
+        !saved ||
+        saved.leagueId !== String(body.leagueId) ||
+        saved.season !== Number(body.season)
+      )
+        return respond(
+          {
+            error: 'Reconnect ESPN once to enable automatic refresh.',
+            reconnect: true,
+          },
+          401,
+        );
+      body = { ...saved, refresh: true };
+    }
     const id = parseLeagueId(String(body.leagueId ?? ''));
     const season = Number(body.season);
     if (
@@ -43,7 +88,7 @@ export async function POST(request: NextRequest) {
     const url = new URL(
       `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${id}`,
     );
-    for (const view of ['mTeam', 'mRoster', 'mSettings'])
+    for (const view of ['mTeam', 'mRoster', 'mSettings', 'mMatchup'])
       url.searchParams.append('view', view);
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (s2 && swid) headers.Cookie = `espn_s2=${s2}; SWID=${swid}`;
@@ -56,7 +101,8 @@ export async function POST(request: NextRequest) {
       return respond(
         {
           error:
-            'This league is private or the ESPN session has expired. Enter fresh espn_s2 and SWID cookies from your signed-in ESPN account.',
+            'Your ESPN session has expired or this league is private. Reconnect with fresh espn_s2 and SWID cookies.',
+          reconnect: true,
         },
         401,
       );
@@ -78,6 +124,13 @@ export async function POST(request: NextRequest) {
     const raw = (await res.json()) as ESPNResponse;
     const league = normalizeLeague(raw, season);
     try {
+      await enrichRosterStats(url, headers, league);
+    } catch {
+      league.warnings.push(
+        'Full-season player stats could not be loaded. Sync ESPN to retry; available projections are still shown.',
+      );
+    }
+    try {
       league.waiverWire = await fetchWaiverWire(url, headers, league);
     } catch {
       league.warnings.push(
@@ -94,7 +147,27 @@ export async function POST(request: NextRequest) {
     if (body.includeTradeHistory === true) {
       league.tradeHistory = await fetchTradeHistory(url, headers, league);
     }
-    return respond({ league });
+    const response = respond({ league });
+    if (body.refresh !== true) {
+      const token = await saveConnection({
+        leagueId: id,
+        season,
+        espnS2: s2,
+        swid,
+        includeTradeHistory: body.includeTradeHistory === true,
+      });
+      response.cookies.set(CONNECTION_COOKIE, token, {
+        httpOnly: true,
+        sameSite: 'strict',
+        path: '/api/espn',
+        maxAge: CONNECTION_MAX_AGE,
+        secure:
+          request.nextUrl.protocol === 'https:' ||
+          request.headers.get('x-forwarded-proto') === 'https',
+      });
+      await deleteConnection(previousToken);
+    }
+    return response;
   } catch (error) {
     if (
       error instanceof Error &&

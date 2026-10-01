@@ -3195,3 +3195,214 @@ h1 {
   white-space: normal;
   min-width: 100px;
 }
+
+.player-detail-row {
+  cursor: pointer;
+}
+.player-detail-row:hover {
+  background: #f7faf4;
+}
+.player-detail-trigger {
+  text-align: left;
+  width: 100%;
+  color: inherit;
+}
+.player-detail-trigger:hover strong {
+  color: var(--green);
+  text-decoration: underline;
+}
+.player-detail-trigger:focus-visible {
+  outline: 2px solid #76965e;
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+.player-modal {
+  max-width: 740px;
+}
+.player-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-right: 20px;
+}
+.player-modal-header .player-avatar {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+}
+.player-modal-header p {
+  font-size: 12px;
+  color: #788471;
+  margin-top: 4px;
+}
+.player-detail-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 24px 0;
+}
+.player-detail-stats > div {
+  background: #f4f7f0;
+  border-radius: 9px;
+  padding: 13px;
+}
+.player-detail-stats dt,
+.player-detail-facts dt {
+  font-size: 11px;
+  color: #788471;
+}
+.player-detail-stats dd {
+  font-size: 23px;
+  font-weight: 650;
+  margin: 8px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.player-detail-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px 24px;
+  margin-bottom: 26px;
+}
+.player-detail-facts dd {
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+.player-weekly-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.player-weekly-heading h3 {
+  font-size: 16px;
+}
+.player-weekly-heading > span,
+.player-weekly-note {
+  font-size: 11px;
+  color: #788471;
+}
+.player-weekly-note {
+  line-height: 1.7;
+  margin: 8px 0 14px;
+}
+.player-weekly-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.player-weekly-table th,
+.player-weekly-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #eef1e9;
+}
+.player-weekly-table th {
+  text-align: left;
+  font-weight: 500;
+}
+.player-weekly-table .number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.player-weekly-table thead {
+  color: #788471;
+  font-size: 11px;
+}
+.player-weekly-table .current-week {
+  background: #f1f6eb;
+}
+.week-tag {
+  display: inline-block;
+  font-size: 9px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #e9efdf;
+  color: #526f40;
+  margin-left: 6px;
+}
+.weekly-projection-value {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.weekly-projection-value > span:last-child {
+  min-width: 36px;
+}
+.weekly-projection-track {
+  width: 100px;
+  height: 5px;
+  border-radius: 3px;
+  background: #eef1e9;
+  overflow: hidden;
+}
+.weekly-projection-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #9bb881;
+}
+.player-espn-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #526f40;
+  margin-top: 20px;
+}
+@media (max-width: 600px) {
+  .player-detail-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .player-modal h2 {
+    font-size: 20px;
+    line-height: 1.25;
+  }
+  .player-modal-header .player-avatar {
+    width: 48px;
+    height: 48px;
+  }
+  .weekly-projection-track {
+    width: 40px;
+  }
+  .week-tag {
+    font-size: 8px;
+    margin-left: 3px;
+  }
+  .player-weekly-table th,
+  .player-weekly-table td {
+    padding: 10px 4px;
+  }
+}
+
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.connected-banner {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.trade-methodology-settings {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  margin: 16px 0;
+}
+.trade-methodology-settings > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.trade-methodology-settings[open] > summary {
+  margin-bottom: 16px;
+}
+.trade-methodology-settings .pickup-option:has(input[type='file']) {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+.trade-methodology-settings input[type='file'] {
+  width: 100%;
+  min-width: 0;
+}

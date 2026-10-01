@@ -17,7 +17,22 @@ export type Player = {
   projectionSource:
     'sample' | 'estimate' | 'weekly-sum' | 'unavailable' | 'custom';
   weeklyProjections?: Record<number, number>;
+  weeklyActuals?: Record<number, number>;
+  percentOwned?: number | null;
+  percentStarted?: number | null;
   byeWeek?: number;
+  weeklyOverrides?: Record<number, number>;
+  projectionBounds?: {
+    ros?: { lower: number; upper: number };
+    weekly?: Record<number, { lower: number; upper: number }>;
+  };
+  forecastUpdatedAt?: string;
+  forecastProvenance?: string;
+  availabilityProbability?: number;
+  returnWeek?: number;
+  scoreStdDev?: number;
+  roleStdDev?: number;
+  transactionLocked?: boolean;
 };
 export type WaiverPlayer = Player & {
   availability: 'FREEAGENT' | 'WAIVERS';
@@ -39,6 +54,7 @@ export type Team = {
   pointsFor: number;
   players: Player[];
   rosterCapacity?: number;
+  acquisitionsRemaining?: number;
 };
 export type League = {
   id: string;
@@ -55,6 +71,9 @@ export type League = {
   waiverWire?: WaiverWire;
   tradeHistory?: TradeHistory;
   playoffStartWeek?: number;
+  matchups?: { id: number; weeks: number[]; homeId: number; awayId: number }[];
+  positionLimits?: Partial<Record<Position, number>>;
+  tradesLocked?: boolean;
 };
 export const slotNames: Record<number, string> = {
   0: 'QB',

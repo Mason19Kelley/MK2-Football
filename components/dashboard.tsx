@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   ArrowUpRight,
   ArrowDownUp,
@@ -46,15 +46,21 @@ import {
   total,
   removeIDPPlayers,
 } from '@/lib/types';
+import { TradeHorizon, horizonLabels } from '@/lib/weekly-trades';
 import {
-  evaluateRoster,
-  TradeHorizon,
-  horizonLabels,
-} from '@/lib/weekly-trades';
-import { planTrade, tradePickupCandidates } from '@/lib/trade-plans';
+  TradeCandidate,
+  FindTradeOptions,
+  TradeSearchProgress,
+} from '@/lib/trade-finder';
+import { runTradeSearch } from '@/lib/trade-search-client';
+import { evaluateForecastRoster } from '@/lib/trade-evaluation';
 import { TradeMoves } from './trade-moves';
 import { TradeWeeklyComparison } from './trade-weekly-comparison';
-import { applyProjections, parseProjectionCSV } from '@/lib/projections';
+import {
+  applyProjections,
+  parseProjectionCSV,
+  preserveForecastOverrides,
+} from '@/lib/projections';
 import { TradeHistoryPanel } from './trade-history';
 import { TradeFinder } from './trade-finder';
 
@@ -176,8 +182,37 @@ export default function Dashboard() {
     [send, setSend] = useState<number[]>([]),
     [receive, setReceive] = useState<number[]>([]),
     [projectionError, setProjectionError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
+  const [needsReconnect, setNeedsReconnect] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshBusy = useRef(false);
+  const lastRefreshAttempt = useRef(0);
+  const connectionGeneration = useRef(0);
   const [includeTradeHistory, setIncludeTradeHistory] = useState(true);
   const [tradePickup, setTradePickup] = useState(false);
+  const [tradeWaiverBaseline, setTradeWaiverBaseline] = useState(true);
+  const [reviewPolicy, setReviewPolicy] = useState<
+    Pick<
+      FindTradeOptions,
+      | 'scenarios'
+      | 'objective'
+      | 'playoffs'
+      | 'ranking'
+      | 'minimumGain'
+      | 'partnerMinimumGain'
+      | 'partnerHorizon'
+    >
+  >({ ranking: 'mine', minimumGain: 0 });
+  const [manualProgress, setManualProgress] = useState<{
+    signature: string;
+    progress: TradeSearchProgress;
+  } | null>(null);
+  const [manualEvaluation, setManualEvaluation] = useState<{
+    league: League;
+    signature: string;
+    candidate?: TradeCandidate;
+    error?: string;
+  } | null>(null);
   const [tradeHorizon, setTradeHorizon] = useState<TradeHorizon>('remaining');
   const [playoffWeek, setPlayoffWeek] = useState('');
   useEffect(() => {
@@ -324,6 +359,7 @@ export default function Dashboard() {
   }
   async function connect(e: React.FormEvent) {
     e.preventDefault();
+    connectionGeneration.current++;
     setLoading(true);
     setError('');
     try {
@@ -359,6 +395,9 @@ export default function Dashboard() {
       );
       setModal(null);
       clearCredentials();
+      setNeedsReconnect(false);
+      setRefreshError('');
+      lastRefreshAttempt.current = Date.now();
       setNotice('League imported. Choose your team from the team selector.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not connect.');
@@ -366,7 +405,115 @@ export default function Dashboard() {
       setLoading(false);
     }
   }
+  const refreshLeague = useCallback(
+    async (automatic = false) => {
+      if (
+        refreshBusy.current ||
+        loading ||
+        league.source !== 'espn' ||
+        needsReconnect
+      )
+        return;
+      refreshBusy.current = true;
+      lastRefreshAttempt.current = Date.now();
+      const generation = connectionGeneration.current;
+      setRefreshing(true);
+      setRefreshError('');
+      try {
+        const response = await fetch('/api/espn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            refresh: true,
+            leagueId: league.id,
+            season: league.season,
+          }),
+        });
+        const data = await response.json();
+        if (generation !== connectionGeneration.current) return;
+        if (!response.ok) {
+          if (data.reconnect || response.status === 401)
+            setNeedsReconnect(true);
+          throw new Error(data.error || 'Refresh failed. Try again shortly.');
+        }
+        const next = removeIDPPlayers(data.league);
+        setOriginal(next);
+        setLeague((current) => preserveForecastOverrides(next, current));
+        const fallbackId = next.teams[0].id;
+        const keepTeam = (id: number) =>
+          next.teams.some((t) => t.id === id) ? id : fallbackId;
+        setMyTeamId(keepTeam);
+        setViewedId(keepTeam);
+        setPartnerId(keepTeam);
+        setSend([]);
+        setReceive([]);
+        setTradePickup(false);
+        if (!automatic)
+          setNotice('League refreshed. Your custom projections are preserved.');
+      } catch (err) {
+        if (generation === connectionGeneration.current)
+          setRefreshError(
+            err instanceof Error ? err.message : 'Could not refresh ESPN.',
+          );
+      } finally {
+        refreshBusy.current = false;
+        setRefreshing(false);
+      }
+    },
+    [league.id, league.season, league.source, loading, needsReconnect],
+  );
+
+  useEffect(() => {
+    if (!ready || league.source !== 'espn' || needsReconnect) return;
+    const refreshIfStale = () => {
+      if (document.visibilityState !== 'visible' || modal === 'connect') return;
+      const synced = Date.parse(league.syncedAt) || 0;
+      if (
+        Date.now() - Math.max(synced, lastRefreshAttempt.current) >=
+        5 * 60 * 1000
+      )
+        void refreshLeague(true);
+    };
+    refreshIfStale();
+    const timer = window.setInterval(refreshIfStale, 30000);
+    window.addEventListener('focus', refreshIfStale);
+    document.addEventListener('visibilitychange', refreshIfStale);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', refreshIfStale);
+      document.removeEventListener('visibilitychange', refreshIfStale);
+    };
+  }, [
+    ready,
+    league.source,
+    league.syncedAt,
+    needsReconnect,
+    modal,
+    refreshLeague,
+  ]);
+
+  function syncESPN() {
+    if (league.source === 'demo' || needsReconnect) openConnect();
+    else void refreshLeague();
+  }
+  async function disconnectESPN() {
+    try {
+      const response = await fetch('/api/espn', { method: 'DELETE' });
+      if (!response.ok)
+        throw new Error('Could not disconnect ESPN. Try again.');
+      connectionGeneration.current++;
+      setRefreshError('');
+      setNeedsReconnect(false);
+      resetDemo();
+      setNotice('ESPN disconnected. Saved connection removed.');
+    } catch (err) {
+      setRefreshError(
+        err instanceof Error ? err.message : 'Could not disconnect ESPN.',
+      );
+    }
+  }
   function resetDemo() {
+    connectionGeneration.current++;
     setLeague(demoLeague);
     setOriginal(demoLeague);
     changeMine(1);
@@ -418,75 +565,96 @@ export default function Dashboard() {
       : tradeHorizon !== 'ros' && league.week > league.finalWeek
         ? 'This season has no remaining weeks.'
         : '';
+  const manualSignature = JSON.stringify({
+    send,
+    receive,
+    partnerId: partner.id,
+    horizon: tradeHorizon,
+    pickup: tradePickup,
+    waiverBaseline: tradeWaiverBaseline,
+    reviewPolicy,
+  });
+  useEffect(() => {
+    if (!send.length || !receive.length || horizonError) return;
+    const controller = new AbortController();
+    runTradeSearch(tradeLeague, myTeamId, {
+      ...reviewPolicy,
+      maxPlayers: 2,
+      partnerId: partner.id,
+      horizon: tradeHorizon,
+      includePickup: tradePickup,
+      waiverBaseline: tradeWaiverBaseline,
+      selectedPackage: { send, receive },
+      includeNonImproving: true,
+      signal: controller.signal,
+      onProgress: (_count, progress) => {
+        if (progress && !controller.signal.aborted)
+          setManualProgress({ signature: manualSignature, progress });
+      },
+    })
+      .then((result) =>
+        setManualEvaluation({
+          league: tradeLeague,
+          signature: manualSignature,
+          candidate: result.candidates[0],
+          error: result.candidates.length
+            ? ''
+            : 'This package lacks complete forecasts or a legal joint roster plan.',
+        }),
+      )
+      .catch((error) => {
+        if (!controller.signal.aborted)
+          setManualEvaluation({
+            league: tradeLeague,
+            signature: manualSignature,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not evaluate this trade.',
+          });
+      });
+    return () => controller.abort();
+  }, [tradeLeague, myTeamId, manualSignature, horizonError]);
   const analysis = useMemo(() => {
-    const horizon = horizonError ? 'ros' : tradeHorizon;
     const evaluate = (players: Player[]) =>
-      evaluateRoster(tradeLeague, players, horizon);
-    const before = evaluate(mine.players),
-      partnerBefore = evaluate(partner.players);
-    try {
-      const plan =
-        send.length && receive.length
-          ? planTrade(
-              tradeLeague,
-              mine.players,
-              partner.players,
-              send,
-              receive,
-              {
-                includePickup: tradePickup,
-                evaluate,
-                pickupCandidates: tradePickup
-                  ? tradePickupCandidates(tradeLeague, horizon)
-                  : [],
-              },
-            )
-          : null;
-      const after = evaluate(plan?.mine.roster ?? mine.players);
-      const partnerAfter = evaluate(plan?.partner.roster ?? partner.players);
-      return {
-        before,
-        partnerBefore,
-        after,
-        partnerAfter,
-        plan,
-        error: '',
-        tradeOnly: plan
-          ? {
-              mine:
-                evaluate(
-                  plan.mine.roster.filter((p) => p.id !== plan.mine.pickup?.id),
-                ).total - before.total,
-              partner:
-                evaluate(
-                  plan.partner.roster.filter(
-                    (p) => p.id !== plan.partner.pickup?.id,
-                  ),
-                ).total - partnerBefore.total,
-            }
-          : null,
-      };
-    } catch (err) {
-      return {
-        before,
-        partnerBefore,
-        after: before,
-        partnerAfter: partnerBefore,
-        plan: null,
-        error:
-          err instanceof Error ? err.message : 'Could not plan this trade.',
-        tradeOnly: null,
-      };
-    }
+      evaluateForecastRoster(
+        tradeLeague,
+        players,
+        horizonError ? 'ros' : tradeHorizon,
+        { streaming: !tradeWaiverBaseline },
+      );
+    const original = evaluate(mine.players),
+      theirs = evaluate(partner.players);
+    const current =
+      manualEvaluation?.league === tradeLeague &&
+      manualEvaluation.signature === manualSignature
+        ? manualEvaluation
+        : undefined;
+    const candidate = current?.candidate;
+    return {
+      before: candidate?.mine.before ?? original,
+      partnerBefore: candidate?.partner.before ?? theirs,
+      after: candidate?.mine.after ?? original,
+      partnerAfter: candidate?.partner.after ?? theirs,
+      plan: candidate?.plan ?? null,
+      baseline: candidate?.baseline,
+      error: current?.error ?? '',
+      loading:
+        !horizonError && send.length > 0 && receive.length > 0 && !current,
+      tradeOnly: candidate?.tradeOnly ?? null,
+      candidate,
+    };
   }, [
     tradeLeague,
     tradeHorizon,
     horizonError,
     mine,
     partner,
-    send,
-    receive,
-    tradePickup,
+    manualEvaluation,
+    manualSignature,
+    tradeWaiverBaseline,
+    send.length,
+    receive.length,
   ]);
   const {
     before,
@@ -498,6 +666,7 @@ export default function Dashboard() {
   const planError = analysis.error;
   const canAnalyze =
     !planError &&
+    !analysis.loading &&
     !horizonError &&
     send.length > 0 &&
     receive.length > 0 &&
@@ -509,7 +678,7 @@ export default function Dashboard() {
     after.missing === 0 &&
     partnerBefore.missing === 0 &&
     partnerAfter.missing === 0;
-  const delta = after.total - before.total;
+  const delta = analysis.candidate?.mine.gain ?? after.total - before.total;
   const projectionDescription =
     league.source === 'demo'
       ? 'Illustrative sample projections'
@@ -700,13 +869,23 @@ export default function Dashboard() {
                         : 'Explore what a trade could do for your starting lineup.'}
               </p>
             </div>
-            <button className="button primary" onClick={openConnect}>
+            <button
+              className="button primary"
+              onClick={syncESPN}
+              disabled={loading || refreshing}
+            >
               {league.source === 'demo' ? (
                 <Link2 size={16} />
               ) : (
                 <RefreshCw size={16} />
               )}{' '}
-              {league.source === 'demo' ? 'Connect ESPN' : 'Sync ESPN'}
+              {league.source === 'demo'
+                ? 'Connect ESPN'
+                : refreshing
+                  ? 'Refreshing…'
+                  : needsReconnect
+                    ? 'Reconnect ESPN'
+                    : 'Refresh ESPN'}
               <ArrowUpRight size={15} />
             </button>
           </div>
@@ -728,10 +907,34 @@ export default function Dashboard() {
                 <CheckCircle2 size={15} />
                 ESPN connected · {league.name}
                 <span className="sync-time">
-                  Synced {new Date(league.syncedAt).toLocaleString()}
+                  Updated {new Date(league.syncedAt).toLocaleString()} ·
+                  Auto-refresh every 5 minutes while open
                 </span>
               </span>
-              <button onClick={resetDemo}>Use sample league</button>
+              <div className="connection-actions">
+                <button onClick={openConnect} disabled={loading || refreshing}>
+                  Change connection
+                </button>
+                <button
+                  onClick={disconnectESPN}
+                  disabled={loading || refreshing}
+                >
+                  Disconnect
+                </button>
+                <button onClick={resetDemo} disabled={loading || refreshing}>
+                  Use sample league
+                </button>
+              </div>
+            </div>
+          )}
+          {refreshError && league.source === 'espn' && (
+            <div className="form-error" role="alert">
+              {refreshError} Your saved league is still available.
+              {needsReconnect && (
+                <button className="button" onClick={openConnect}>
+                  Reconnect ESPN
+                </button>
+              )}
             </div>
           )}
           {view === 'roster' && (
@@ -1170,7 +1373,7 @@ export default function Dashboard() {
               league={league}
               mine={mine}
               onTeamChange={changeMine}
-              onSync={openConnect}
+              onSync={syncESPN}
             />
           )}
           {view === 'trade' && (
@@ -1271,7 +1474,20 @@ export default function Dashboard() {
                 league={tradeLeague}
                 horizon={tradeHorizon}
                 myTeamId={myTeamId}
+                onUpdateLeague={setLeague}
+                onRestoreForecasts={() => setLeague(original)}
                 onReview={(candidate) => {
+                  setReviewPolicy({
+                    partnerHorizon: candidate.partnerHorizon,
+                    scenarios: candidate.scenarios,
+                    objective: candidate.objective,
+                    playoffs: candidate.playoffs,
+                    ranking: candidate.searchPolicy?.ranking ?? 'mine',
+                    minimumGain: candidate.searchPolicy?.minimumGain ?? 0,
+                    partnerMinimumGain:
+                      candidate.searchPolicy?.partnerMinimumGain,
+                  });
+                  setTradeWaiverBaseline(candidate.waiverBaseline ?? true);
                   setPartnerId(candidate.partnerId);
                   setSend(candidate.send.map((p) => p.id));
                   setReceive(candidate.receive.map((p) => p.id));
@@ -1288,6 +1504,32 @@ export default function Dashboard() {
                   );
                 }}
               />
+              <label className="pickup-option">
+                <input
+                  type="checkbox"
+                  checked={tradeWaiverBaseline}
+                  onChange={(e) => setTradeWaiverBaseline(e.target.checked)}
+                />{' '}
+                Compare with best no-trade add/drop; one immediate acquisition
+                per team
+              </label>
+              {reviewPolicy.scenarios && (
+                <p className="finder-note">
+                  Reviewed using {reviewPolicy.scenarios.samples} outcome
+                  scenarios and the {reviewPolicy.objective ?? 'points'}{' '}
+                  objective. These assumptions continue to apply when you edit
+                  this trade.{' '}
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={() =>
+                      setReviewPolicy({ ranking: 'mine', minimumGain: 0 })
+                    }
+                  >
+                    Use deterministic points
+                  </button>
+                </p>
+              )}
               <div className="trade-grid">
                 <TradePicker
                   team={mine}
@@ -1302,52 +1544,57 @@ export default function Dashboard() {
                   label="YOU RECEIVE"
                 />
               </div>
-              {send.length > 0 &&
-                receive.length > 0 &&
-                send.length !== receive.length && (
-                  <>
-                    <label className="pickup-option">
-                      <input
-                        type="checkbox"
-                        checked={tradePickup}
-                        onChange={(e) => setTradePickup(e.target.checked)}
-                      />{' '}
-                      Include an optional free-agent pickup in the open spot
-                    </label>
-                    {planError ? (
-                      <p className="form-error" role="alert">
-                        {planError}
-                      </p>
-                    ) : (
-                      tradePlan && (
+              {send.length > 0 && receive.length > 0 && (
+                <>
+                  <label className="pickup-option">
+                    <input
+                      type="checkbox"
+                      checked={tradePickup}
+                      onChange={(e) => setTradePickup(e.target.checked)}
+                    />{' '}
+                    Include a free-agent acquisition in the roster plan
+                  </label>
+                  {planError ? (
+                    <p className="form-error" role="alert">
+                      {planError}
+                    </p>
+                  ) : (
+                    tradePlan && (
+                      <div className="trade-lab-plan">
                         <TradeMoves
                           plan={tradePlan}
                           partnerName={partner.name}
                         />
-                      )
-                    )}
-                  </>
-                )}
+                      </div>
+                    )
+                  )}
+                </>
+              )}
               <div className="panel trade-results">
                 <div>
                   <span className="eyebrow">PROJECTED LINEUP IMPACT</span>
                   <h3>
                     {!send.length || !receive.length
                       ? 'What does the trade change?'
-                      : !canAnalyze
-                        ? 'More data needed'
-                        : delta > 0.05
-                          ? 'Your starting lineup gets stronger.'
-                          : delta < -0.05
-                            ? 'Your starting lineup loses projected points.'
-                            : 'Your starting projection stays about the same.'}
+                      : analysis.loading
+                        ? 'Evaluating trade…'
+                        : !canAnalyze
+                          ? 'More data needed'
+                          : delta > 0.05
+                            ? 'Your starting lineup gets stronger.'
+                            : delta < -0.05
+                              ? 'Your starting lineup loses projected points.'
+                              : 'Your starting projection stays about the same.'}
                   </h3>
                   <p>
                     {!send.length || !receive.length
                       ? 'Choose at least one player on each side to compare.'
-                      : !canAnalyze
-                        ? 'Both teams need projection coverage and enough eligible players for their starting slots. Check the selected period, roster moves, and projection settings.'
-                        : `${horizonLabels[tradeHorizon]} · optimized independently before and after. ${tradePlan?.mine.pickup || tradePlan?.partner.pickup ? 'Includes the optional free-agent pickup.' : ''}`}
+                      : analysis.loading
+                        ? `Comparing legal roster plans and no-trade alternatives.${manualProgress?.signature === manualSignature ? ` ${manualProgress.progress.evaluatedRosters.toLocaleString()} roster plans evaluated.` : ''}`
+                        : !canAnalyze
+                          ? planError ||
+                            'Both teams need projection coverage and enough eligible players for their starting slots. Check the selected period, roster moves, and projection settings.'
+                          : `${horizonLabels[tradeHorizon]} · compared with the same roster policy before and after. ${tradePlan?.mine.pickup || tradePlan?.partner.pickup ? 'Includes the optional free-agent pickup.' : ''}`}
                   </p>
                 </div>
                 <div className="trade-impact">
@@ -1377,11 +1624,44 @@ export default function Dashboard() {
                   </span>
                   <strong>
                     {canAnalyze
-                      ? `${partnerAfter.total - partnerBefore.total >= 0 ? '+' : ''}${points(partnerAfter.total - partnerBefore.total)}`
+                      ? `${(analysis.candidate?.partner.gain ?? partnerAfter.total - partnerBefore.total) >= 0 ? '+' : ''}${points(analysis.candidate?.partner.gain ?? partnerAfter.total - partnerBefore.total)}`
                       : '—'}
                   </strong>
                 </div>
               </div>
+              {canAnalyze && analysis.baseline && (
+                <div className="finder-note">
+                  <p>No-trade moves used for comparison:</p>
+                  <TradeMoves
+                    plan={analysis.baseline}
+                    partnerName={partner.name}
+                  />
+                </div>
+              )}
+              {canAnalyze && analysis.candidate?.mine.uncertainty && (
+                <p className="finder-note">
+                  Your scenario gain: 10th percentile{' '}
+                  {points(analysis.candidate.mine.uncertainty.p10)}; improvement
+                  in{' '}
+                  {(
+                    100 *
+                    analysis.candidate.mine.uncertainty.probabilityImproves
+                  ).toFixed(0)}
+                  % of scenarios; Monte Carlo standard error{' '}
+                  {analysis.candidate.mine.uncertainty.standardError.toFixed(3)}
+                  .
+                </p>
+              )}
+              {canAnalyze && analysis.candidate?.mine.outcomes && (
+                <p className="finder-note">
+                  Expected wins:{' '}
+                  {analysis.candidate.mine.outcomes.before.wins.toFixed(2)} →{' '}
+                  {analysis.candidate.mine.outcomes.after.wins.toFixed(2)}.{' '}
+                  {analysis.candidate.objective === 'title'
+                    ? `Title probability: ${(100 * analysis.candidate.mine.outcomes.before.title!).toFixed(1)}% → ${(100 * analysis.candidate.mine.outcomes.after.title!).toFixed(1)}%.`
+                    : ''}
+                </p>
+              )}
               {canAnalyze &&
                 analysis.tradeOnly &&
                 (tradePlan?.mine.pickup || tradePlan?.partner.pickup) && (
@@ -1397,13 +1677,19 @@ export default function Dashboard() {
                 <div className="panel trade-weekly-details">
                   <TradeWeeklyComparison
                     league={tradeLeague}
-                    before={mine.players}
+                    before={analysis.baseline?.mine.roster ?? mine.players}
+                    scenarios={reviewPolicy.scenarios}
+                    streaming={!tradeWaiverBaseline}
                     after={tradePlan.mine.roster}
                     name="Your team"
                   />
                   <TradeWeeklyComparison
                     league={tradeLeague}
-                    before={partner.players}
+                    before={
+                      analysis.baseline?.partner.roster ?? partner.players
+                    }
+                    scenarios={reviewPolicy.scenarios}
+                    streaming={!tradeWaiverBaseline}
                     after={tradePlan.partner.roster}
                     name={partner.name}
                   />
@@ -1420,6 +1706,7 @@ export default function Dashboard() {
                     setSend([]);
                     setReceive([]);
                     setTradePickup(false);
+                    setReviewPolicy({ ranking: 'mine', minimumGain: 0 });
                   }}
                 >
                   Reset trade
@@ -1563,8 +1850,9 @@ export default function Dashboard() {
               <div className="privacy-note">
                 <Shield size={14} />
                 Cookies are sent to this app’s server over your connection and
-                forwarded only to ESPN. They are cleared after use and are never
-                saved.
+                forwarded only to ESPN. They are saved encrypted on the server
+                so you can refresh without entering them again. Disconnect
+                removes the saved connection.
               </div>
             </div>
           )}
@@ -1592,7 +1880,8 @@ export default function Dashboard() {
           </button>
           <p className="form-note">
             Your imported roster snapshot is saved in this browser. ESPN’s
-            unofficial API may change. Syncing replaces custom projections.
+            unofficial API may change. Refreshes preserve custom projections;
+            connecting a league replaces them.
           </p>
         </form>
       </Dialog>
@@ -1705,8 +1994,9 @@ export default function Dashboard() {
               <h3>Connect your league</h3>
               <p>
                 Paste an ESPN league link or ID. Private leagues also need your
-                ESPN session cookies. We import a snapshot; sync again when your
-                rosters change.
+                ESPN session cookies. Your connection is saved for automatic
+                refreshes and the Refresh ESPN button. Reconnect if your ESPN
+                session expires.
               </p>
             </div>
           </div>

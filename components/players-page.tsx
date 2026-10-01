@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { ArrowDownUp, Search, Settings2, X } from 'lucide-react';
 import { League, Player, points, positions } from '@/lib/types';
 import Avatar from './player-avatar';
+import PlayerModal from './player-modal';
 
 type SortKey = 'name' | 'weekly' | 'ros';
 const sources: Record<Player['projectionSource'], string> = {
@@ -21,6 +22,10 @@ export default function PlayersPage({
   league: League;
   onProjectionSettings: () => void;
 }) {
+  const [selected, setSelected] = useState<{
+    player: Player;
+    owner: string;
+  } | null>(null);
   const [query, setQuery] = useState('');
   const [position, setPosition] = useState('All');
   const [roster, setRoster] = useState('all');
@@ -192,9 +197,20 @@ export default function PlayersPage({
             </thead>
             <tbody>
               {displayed.slice(0, limit).map(({ player, owner }) => (
-                <tr key={player.id}>
+                <tr
+                  key={player.id}
+                  className="player-detail-row"
+                  onClick={() => setSelected({ player, owner })}
+                >
                   <td>
-                    <div className="player-cell">
+                    <button
+                      className="player-cell player-detail-trigger"
+                      aria-label={`View ${player.name} details`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelected({ player, owner });
+                      }}
+                    >
                       <Avatar player={player} />
                       <div>
                         <strong>{player.name}</strong>
@@ -205,7 +221,7 @@ export default function PlayersPage({
                             : ''}
                         </small>
                       </div>
-                    </div>
+                    </button>
                   </td>
                   <td className="number projection-number">
                     {points(player.weekly)}
@@ -246,6 +262,15 @@ export default function PlayersPage({
           </button>
         )}
       </section>
+      {selected && (
+        <PlayerModal
+          key={selected.player.id}
+          player={selected.player}
+          owner={selected.owner}
+          league={league}
+          onClose={() => setSelected(null)}
+        />
+      )}
       <p className="players-note">
         ROS means rest of season. Estimates and custom projections are labeled
         by source.
