@@ -14,7 +14,6 @@ export type ESPNConnection = {
   season: number;
   espnS2: string;
   swid: string;
-  includeTradeHistory: boolean;
   expiresAt: number;
 };
 const directory = () =>

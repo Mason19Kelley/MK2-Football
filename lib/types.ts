@@ -1,5 +1,3 @@
-import type { TradeHistory } from './trade-history';
-
 export type Position = 'QB' | 'RB' | 'WR' | 'TE' | 'D/ST' | 'K';
 export type Player = {
   id: number;
@@ -69,8 +67,9 @@ export type League = {
   slots: { id: number; label: string; count: number }[];
   warnings: string[];
   waiverWire?: WaiverWire;
-  tradeHistory?: TradeHistory;
   playoffStartWeek?: number;
+  playoffTeamCount?: number;
+  playoffRoundWeeks?: number;
   matchups?: { id: number; weeks: number[]; homeId: number; awayId: number }[];
   positionLimits?: Partial<Record<Position, number>>;
   tradesLocked?: boolean;

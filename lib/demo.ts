@@ -194,6 +194,24 @@ export const demoLeague: League = {
   week: 4,
   finalWeek: 17,
   playoffStartWeek: 15,
+  playoffTeamCount: 6,
+  playoffRoundWeeks: 1,
+  // Illustrative round-robin schedule for the sample league.
+  matchups: Array.from({ length: 14 }, (_, index) => {
+    const rotation = teams.slice(1);
+    const offset = index % rotation.length;
+    const order = [
+      teams[0],
+      ...rotation.slice(offset),
+      ...rotation.slice(0, offset),
+    ];
+    return Array.from({ length: teams.length / 2 }, (_, pair) => ({
+      id: index * teams.length + pair,
+      weeks: [index + 1],
+      homeId: order[pair].id,
+      awayId: order[order.length - 1 - pair].id,
+    }));
+  }).flat(),
   scoring: 'PPR',
   source: 'demo',
   syncedAt: '',

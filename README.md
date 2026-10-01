@@ -1,4 +1,4 @@
-# Sunday
+# MKII Football
 
 A responsive fantasy football web app for viewing your ESPN league, exploring projections, and trying trades. Built with Next.js App Router, React, TypeScript, and Lucide icons.
 
@@ -17,7 +17,7 @@ Open http://localhost:3000. The app opens with an explicitly labeled sample leag
 
 1. Click **Connect ESPN**.
 2. Paste your ESPN league URL (containing `leagueId`) or numeric league ID and choose its season.
-3. For a private league, check **My league is private**. While signed into ESPN, find the `espn_s2` and `SWID` cookie values in your browser's developer tools under **Application → Cookies** (Chrome) or **Storage → Cookies** (Firefox), and paste them into the corresponding fields. Sunday never asks for your ESPN password.
+3. For a private league, check **My league is private**. While signed into ESPN, find the `espn_s2` and `SWID` cookie values in your browser's developer tools under **Application → Cookies** (Chrome) or **Storage → Cookies** (Firefox), and paste them into the corresponding fields. MKII Football never asks for your ESPN password.
 4. Select your roster using **View team**, then **Set as my team**. You can also choose your team inside Trade lab.
 
 The server fetches `mTeam`, `mRoster`, `mMatchup`, and `mSettings` from ESPN's read API, then paginates `kona_player_info` for available active players. The connection is saved on the server with AES-256-GCM encryption. The browser receives a random HttpOnly, SameSite cookie, never ESPN credentials. Imported data and your team selection remain in local storage. **Refresh ESPN** uses the saved connection without asking for cookies again. Stale data refreshes every five minutes while the page is visible, including when you reopen or return to the app. Automatic refresh pauses after an expired connection; reconnect once with fresh cookies. Refreshes preserve custom ROS overrides and team selections; a new connection replaces projections. **Disconnect** deletes the saved connection and returns to the sample league. The connection lasts up to 180 days, subject to ESPN session expiry.
@@ -141,24 +141,3 @@ The optimizer is also checked against exhaustive assignments on varied small ros
 - `app/globals.css` — responsive styling and charts.
 
 Current scope is a single-manager app with local browser storage. It has no user accounts, cloud sync, automatic background polling, or persistent ESPN credential store. Deploy as a Node-capable Next.js app with HTTPS. For a public multi-user service, add authentication, request rate limits, encrypted credential management if background sync is introduced, and a durable database.
-
-## ESPN trade-history collection
-
-**Connect ESPN / Change connection → Import trade history for this season** imports accessible proposal, acceptance, decline, veto, and uphold records. **Trade lab → Trade history** shows coverage, recent records, and **Export trade dataset** downloads normalized JSON. History is saved with the browser's league snapshot. Older snapshots work without history. Turn the checkbox off for a faster roster-only import.
-
-For collecting several seasons or leagues into local files:
-
-```sh
-npm run collect:trades -- --league 899513 --seasons 2024,2025
-npm run collect:trades -- --league 123456 --seasons 2025,2026 --output data/trade-history
-```
-
-For private leagues, set `ESPN_S2` and `ESPN_SWID` in the collector's environment. Do not place cookies in command arguments or dataset files. Each season writes a new timestamped JSON file; default output is git-ignored. Collection is read-only, has bounded concurrency/timeouts, and reports failed weeks. A partial collection still writes the accessible records and exits with status 1. Repeated snapshots must be deduplicated by league, season, source, and event ID before combining them for analysis.
-
-The collector queries `mTransactions2` for preseason week 0 through the current/final week (capped at 25), and paginates up to 500 completed-trade activity topics from `kona_league_communication`. ESPN's unofficial endpoints may withhold player details, omit transaction history, or return 404 for historical activity. Coverage describes requests that succeeded, not a guarantee that ESPN disclosed every offer. Normalized exports omit member identities and credentials; player IDs and team IDs are retained. Displayed player names come from the imported roster and are not historical valuation features.
-
-`events` preserves separate transaction stages and activity records. `examples` contains at most one binary label per explicitly linked offer component, requiring an executed acceptance/decline and an unambiguous complete two-team player package. Exact ESPN `relatedTransactionId` links can recover a hidden package from another record. Pending/canceled/error records, vetoes, conflicting labels, changed packages, partial packages, and unsupported assets are excluded. Completed activity records are retained separately and never matched to proposals by a guessed date or player combination. Counts are records, not unique completed trades.
-
-This is the data-collection stage, not a trained acceptance model. Every example has `historicalFeatures: null`: offer-time rosters, injuries, scoring settings, and player valuations must be acquired before training. Do not substitute today's projections or future performance. Unmade trades are not rejected offers. Model validation should hold out later seasons and entire leagues, then evaluate calibration on real accepted/declined proposals. One league's completed trades alone cannot justify acceptance percentages.
-
-Implementation references: [ESPN transaction reader](https://github.com/cwendt94/espn-api/blob/master/espn_api/football/league.py), [transaction fields](https://github.com/cwendt94/espn-api/blob/master/espn_api/football/transaction.py), [activity fields](https://github.com/cwendt94/espn-api/blob/master/espn_api/football/activity.py).

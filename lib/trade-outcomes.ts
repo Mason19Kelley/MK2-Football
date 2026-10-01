@@ -10,6 +10,8 @@ export type PlayoffScenario = {
 };
 export type OutcomeSummary = {
   wins: number;
+  losses: number;
+  ties: number;
   playoffs?: number;
   title?: number;
   values: number[];
@@ -114,6 +116,8 @@ export function evaluateLeagueOutcomes(
       t.id,
       {
         wins: 0,
+        losses: 0,
+        ties: 0,
         playoffs: objective === 'title' ? 0 : undefined,
         title: objective === 'title' ? 0 : undefined,
         values: [] as number[],
@@ -157,6 +161,10 @@ export function evaluateLeagueOutcomes(
       a.wins += aw;
       a.newWins += aw;
       a.points += away;
+      result.get(m.homeId)!.losses += Number(home < away) / samples;
+      result.get(m.awayId)!.losses += Number(away < home) / samples;
+      result.get(m.homeId)!.ties += Number(home === away) / samples;
+      result.get(m.awayId)!.ties += Number(home === away) / samples;
     }
     for (const [id, s] of standings) {
       result.get(id)!.wins += s.newWins / samples;

@@ -1,0 +1,97 @@
+import { League } from './types';
+import {
+  defaultScenarioSettings,
+  evaluateForecastRoster,
+} from './trade-evaluation';
+import {
+  evaluateLeagueOutcomes,
+  PlayoffScenario,
+  validateOutcomeSchedule,
+} from './trade-outcomes';
+
+export type SeasonForecast = {
+  teams: {
+    id: number;
+    wins: number;
+    losses: number;
+    ties: number;
+    playoffs?: number;
+    championship?: number;
+  }[];
+  samples: number;
+  description: string;
+};
+
+export function forecastSeason(league: League): SeasonForecast {
+  if (!league.playoffStartWeek)
+    throw new Error(
+      'Sync ESPN to load the regular-season end date and matchup schedule.',
+    );
+  const count = league.playoffTeamCount ?? (league.teams.length >= 10 ? 6 : 4);
+  const roundWeeks = league.playoffRoundWeeks ?? 1;
+  const bracket = {
+    teams: count,
+    startWeek: league.playoffStartWeek,
+    roundWeeks,
+    reseed: false,
+  } as PlayoffScenario;
+  // Records can still be forecast when the imported playoff format is unsupported.
+  validateOutcomeSchedule(league, 'remaining', 'wins');
+  let bracketError = '';
+  try {
+    validateOutcomeSchedule(league, 'remaining', 'title', bracket);
+  } catch (error) {
+    bracketError =
+      error instanceof Error ? error.message : 'Unsupported playoff format.';
+  }
+  const scenarios = {
+    ...defaultScenarioSettings,
+    samples: 512,
+    seed: league.season,
+  };
+  const evaluations = new Map(
+    league.teams.map((team) => [
+      team.id,
+      evaluateForecastRoster(league, team.players, 'remaining', { scenarios }),
+    ]),
+  );
+  const outcomes = evaluateLeagueOutcomes(
+    league,
+    evaluations,
+    'remaining',
+    bracketError ? 'wins' : 'title',
+    bracket,
+  );
+  const estimated = [...evaluations.values()].some((e) =>
+    e.weeks.some((w) => w.estimated > 0),
+  );
+  const missing = [...evaluations.values()].some((e) =>
+    e.weeks.some((w) => w.missing > 0),
+  );
+  return {
+    teams: league.teams.map((team) => {
+      const outcome = outcomes.get(team.id)!;
+      return {
+        id: team.id,
+        wins: team.wins + outcome.wins - outcome.ties * 0.5,
+        losses: team.losses + outcome.losses,
+        ties: team.ties + outcome.ties,
+        playoffs: outcome.playoffs,
+        championship: outcome.title,
+      };
+    }),
+    samples: scenarios.samples,
+    description: [
+      `${scenarios.samples} season simulations · Expected record through Week ${league.playoffStartWeek - 1}.`,
+      'Weekly lineups optimized from current rosters; byes, availability and scoring variance included. Defaults: 95% weekly availability, 35% scoring variation, 10% season-long role variation, and 20% same-NFL-team scoring correlation; player overrides take precedence. No future trades or pickups.',
+      bracketError
+        ? `Playoff odds unavailable: ${bracketError}`
+        : `${count}-team bracket${league.playoffTeamCount === undefined ? ' (assumed)' : ''}, ${roundWeeks}-week rounds${league.playoffRoundWeeks === undefined ? ' (assumed)' : ''}; top seeds receive byes when needed. Wins, then points scored, determine seeding; fixed bracket, higher seed wins playoff ties.`,
+      estimated ? 'Some weekly forecasts are estimated from ROS totals.' : '',
+      missing ? 'Missing player forecasts reduce projected scores.' : '',
+      'Odds are model estimates; league-specific divisions and tiebreakers may differ.',
+    ]
+      .filter(Boolean)
+      .join(' '),
+  };
+}

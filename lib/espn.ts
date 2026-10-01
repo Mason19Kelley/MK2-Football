@@ -51,6 +51,8 @@ export type ESPNResponse = {
     scheduleSettings?: {
       matchupPeriodCount?: number;
       matchupPeriodLength?: number;
+      playoffTeamCount?: number;
+      playoffMatchupPeriodLength?: number;
       matchupPeriods?: Record<string, number[]>;
     };
     scoringSettings?: { scoringItems?: { statId: number; points: number }[] };
@@ -391,6 +393,12 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
     : (schedule?.matchupPeriodCount ?? 0) *
       (schedule?.matchupPeriodLength ?? 1);
   return {
+    ...(schedule?.playoffTeamCount !== undefined
+      ? { playoffTeamCount: schedule.playoffTeamCount }
+      : {}),
+    ...(schedule?.playoffMatchupPeriodLength !== undefined
+      ? { playoffRoundWeeks: schedule.playoffMatchupPeriodLength }
+      : {}),
     ...(raw.schedule ? {
       matchups: raw.schedule.flatMap((matchup, index) => {
         const period = matchup.matchupPeriodId;

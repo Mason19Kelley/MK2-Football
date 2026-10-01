@@ -6,7 +6,6 @@ import {
   enrichByeWeeks,
   enrichRosterStats,
 } from '@/lib/espn';
-import { fetchTradeHistory } from '@/lib/trade-history';
 import { fetchWaiverWire } from '@/lib/waivers';
 import { isAllowedRequestOrigin } from '@/lib/request-origin';
 import {
@@ -144,9 +143,6 @@ export async function POST(request: NextRequest) {
         'NFL bye weeks could not be loaded. Weekly trade estimates assume unknown byes are playable; sync ESPN to retry.',
       );
     }
-    if (body.includeTradeHistory === true) {
-      league.tradeHistory = await fetchTradeHistory(url, headers, league);
-    }
     const response = respond({ league });
     if (body.refresh !== true) {
       const token = await saveConnection({
@@ -154,7 +150,6 @@ export async function POST(request: NextRequest) {
         season,
         espnS2: s2,
         swid,
-        includeTradeHistory: body.includeTradeHistory === true,
       });
       response.cookies.set(CONNECTION_COOKIE, token, {
         httpOnly: true,

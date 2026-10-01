@@ -527,7 +527,7 @@ export function TradeFinder({
             );
             const link = document.createElement('a');
             link.href = url;
-            link.download = `sunday-forecasts-${league.id}-${league.season}-${Date.now()}.json`;
+            link.download = `mkii-football-forecasts-${league.id}-${league.season}-${Date.now()}.json`;
             link.click();
             URL.revokeObjectURL(url);
           }}

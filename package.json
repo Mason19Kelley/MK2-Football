@@ -9,8 +9,7 @@
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
-    "format": "prettier --write app components lib tests *.ts *.json README.md",
-    "collect:trades": "tsx scripts/collect-trades.ts"
+    "format": "prettier --write app components lib tests *.ts *.json README.md"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

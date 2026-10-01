@@ -116,7 +116,6 @@ test('saved ESPN connections refresh securely, expire, and disconnect', async (t
     season: 2025,
     espnS2: '',
     swid: '',
-    includeTradeHistory: false,
   });
   const realNow = Date.now;
   t.mock.method(Date, 'now', () => realNow() + 181 * 24 * 60 * 60 * 1000);
@@ -127,7 +126,6 @@ test('saved ESPN connections refresh securely, expire, and disconnect', async (t
     season: 2025,
     espnS2: '',
     swid: '',
-    includeTradeHistory: false,
   });
   const files = (await readdir(directory)).filter((file) =>
     file.endsWith('.json'),

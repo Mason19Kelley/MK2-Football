@@ -54,6 +54,7 @@ import {
 } from '@/lib/trade-finder';
 import { runTradeSearch } from '@/lib/trade-search-client';
 import { evaluateForecastRoster } from '@/lib/trade-evaluation';
+import type { SeasonForecast } from '@/lib/season-forecast';
 import { TradeMoves } from './trade-moves';
 import { TradeWeeklyComparison } from './trade-weekly-comparison';
 import {
@@ -61,7 +62,6 @@ import {
   parseProjectionCSV,
   preserveForecastOverrides,
 } from '@/lib/projections';
-import { TradeHistoryPanel } from './trade-history';
 import { TradeFinder } from './trade-finder';
 
 type View = 'roster' | 'league' | 'players' | 'trade' | 'waivers';
@@ -188,7 +188,6 @@ export default function Dashboard() {
   const refreshBusy = useRef(false);
   const lastRefreshAttempt = useRef(0);
   const connectionGeneration = useRef(0);
-  const [includeTradeHistory, setIncludeTradeHistory] = useState(true);
   const [tradePickup, setTradePickup] = useState(false);
   const [tradeWaiverBaseline, setTradeWaiverBaseline] = useState(true);
   const [reviewPolicy, setReviewPolicy] = useState<
@@ -369,7 +368,6 @@ export default function Dashboard() {
         body: JSON.stringify({
           leagueId: leagueInput,
           season,
-          includeTradeHistory,
           espnS2: privateLeague ? s2 : '',
           swid: privateLeague ? swid : '',
         }),
@@ -689,13 +687,23 @@ export default function Dashboard() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="/" aria-label="Sunday home">
-          <span className="brand-symbol">
-            <span />
-            <span />
-            <span />
+        <a className="brand" href="/" aria-label="MKII Football home">
+          <svg className="brand-symbol" viewBox="0 0 40 40" aria-hidden="true">
+            <path
+              d="M6 34C1 19 19 1 34 6C39 21 21 39 6 34Z"
+              fill="currentColor"
+            />
+            <path
+              d="M13 27L27 13M15 20L20 25M19 16L24 21M23 12L28 17"
+              fill="none"
+              stroke="var(--surface)"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span className="brand-name">
+            MKII<span>Football</span>
           </span>
-          sunday<span className="brand-period">.</span>
         </a>
         <div className="sidebar-section-label">YOUR PLAYBOOK</div>
         <nav className="main-nav" aria-label="Main navigation">
@@ -785,7 +793,7 @@ export default function Dashboard() {
             onClick={() => setModal('help')}
           >
             <CircleHelp size={18} />
-            How Sunday works
+            How MKII Football works
             <ArrowUpRight size={14} />
           </button>
           <div className="profile">
@@ -1340,8 +1348,8 @@ export default function Dashboard() {
                 <div>
                   <h2>Around the league</h2>
                   <p>
-                    Ranked by current starters’ rest-of-season points. Missing
-                    projections reduce totals.
+                    Ranked by current starters’ rest-of-season points. Expected
+                    records and odds model the remaining schedule.
                   </p>
                 </div>
                 <span className="count-chip">{league.teams.length} teams</span>
@@ -1349,7 +1357,7 @@ export default function Dashboard() {
               <LeagueTable
                 teams={rankings}
                 myTeamId={myTeamId}
-                week={league.week}
+                league={league}
                 onView={(id) => {
                   setViewedId(id);
                   setView('roster');
@@ -1469,7 +1477,6 @@ export default function Dashboard() {
                   {horizonError}
                 </p>
               )}
-              <TradeHistoryPanel league={league} />
               <TradeFinder
                 league={tradeLeague}
                 horizon={tradeHorizon}
@@ -1731,7 +1738,7 @@ export default function Dashboard() {
           </div>
           <footer className="main-footer">
             <span>Built for the long game.</span>
-            <span className="footer-brand">sunday.</span>
+            <span className="footer-brand">MKII Football</span>
           </footer>
         </main>
       </div>
@@ -1756,7 +1763,7 @@ export default function Dashboard() {
           <Link2 size={24} />
         </span>
         <div className="eyebrow">YOUR LEAGUE, CONNECTED</div>
-        <h2>Bring your league to Sunday.</h2>
+        <h2>Bring your league to MKII Football.</h2>
         <p className="modal-description">
           Import your ESPN teams, rosters, league scoring, and available
           projections.
@@ -1794,19 +1801,6 @@ export default function Dashboard() {
             />
             My league is private
           </label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={includeTradeHistory}
-              onChange={(e) => setIncludeTradeHistory(e.target.checked)}
-              disabled={loading}
-            />
-            Import trade history for this season
-          </label>
-          <p className="finder-note">
-            Includes accessible accepted and declined offer records. History
-            adds time to the import and is saved in this browser.
-          </p>
           {privateLeague && (
             <div className="private-fields">
               <p>
@@ -1926,7 +1920,7 @@ export default function Dashboard() {
             className="button secondary"
             onClick={() =>
               download(
-                'sunday-projections-template.csv',
+                'mkii-football-projections-template.csv',
                 'player_id,ros_points\n' +
                   [
                     ...league.teams.flatMap((t) => t.players),
@@ -1979,14 +1973,14 @@ export default function Dashboard() {
         </p>
       </Dialog>
       <Dialog
-        label="How Sunday works"
+        label="How MKII Football works"
         open={modal === 'help'}
         onClose={closeModal}
       >
         <span className="modal-icon">
           <Sparkles size={24} />
         </span>
-        <h2>Your Sunday playbook.</h2>
+        <h2>Your MKII Football playbook.</h2>
         <div className="help-steps">
           <div>
             <span>01</span>
@@ -2026,9 +2020,9 @@ export default function Dashboard() {
             <div>
               <h3>Try a trade</h3>
               <p>
-                Select players on both sides. Sunday matches players to eligible
-                starting slots and compares the strongest projected lineups.
-                This first model ignores weekly schedules and waiver
+                Select players on both sides. MKII Football matches players to
+                eligible starting slots and compares the strongest projected
+                lineups. This first model ignores weekly schedules and waiver
                 replacements.
               </p>
             </div>
@@ -2167,18 +2161,58 @@ function TradePicker({
   );
 }
 
-type LeagueSort = 'rank' | 'team' | 'record' | 'weekly' | 'ros' | 'players';
+type LeagueSort =
+  | 'rank'
+  | 'team'
+  | 'record'
+  | 'weekly'
+  | 'ros'
+  | 'expected'
+  | 'playoffs'
+  | 'championship';
 function LeagueTable({
   teams,
   myTeamId,
-  week,
+  league,
   onView,
 }: {
   teams: Team[];
   myTeamId: number;
-  week: number;
+  league: League;
   onView: (id: number) => void;
 }) {
+  const [forecastState, setForecastState] = useState<{
+    league: League;
+    result?: SeasonForecast;
+    error?: string;
+  }>();
+  useEffect(() => {
+    const worker = new Worker(
+      new URL('../lib/season-worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+    worker.onmessage = ({
+      data,
+    }: MessageEvent<{ result?: SeasonForecast; error?: string }>) => {
+      setForecastState({ league, ...data });
+      worker.terminate();
+    };
+    worker.onerror = () => {
+      setForecastState({
+        league,
+        error: 'Season forecast failed. Reload to try again.',
+      });
+      worker.terminate();
+    };
+    worker.postMessage(league);
+    return () => worker.terminate();
+  }, [league]);
+  const forecast = forecastState?.league === league ? forecastState : undefined;
+  const forecasts = new Map(
+    forecast?.result?.teams.map((team) => [team.id, team]),
+  );
+  const chance = (value: number | undefined) =>
+    value === undefined ? '—' : `${(value * 100).toFixed(1)}%`;
   const [sort, setSort] = useState<LeagueSort>('rank');
   const [ascending, setAscending] = useState(true);
   const rows = teams
@@ -2187,7 +2221,9 @@ function LeagueTable({
       rank: i + 1,
       weekly: total(team.players.filter(active), 'weekly'),
       ros: total(team.players.filter(active), 'ros'),
-      projected: team.players.filter((p) => p.ros !== null).length,
+      expected: forecasts.get(team.id)?.wins,
+      playoffs: forecasts.get(team.id)?.playoffs,
+      championship: forecasts.get(team.id)?.championship,
     }))
     .sort((a, b) => {
       const comparison =
@@ -2195,9 +2231,7 @@ function LeagueTable({
           ? a.team.name.localeCompare(b.team.name)
           : sort === 'record'
             ? a.team.wins - b.team.wins || b.team.losses - a.team.losses
-            : sort === 'players'
-              ? a.team.players.length - b.team.players.length
-              : a[sort] - b[sort];
+            : (a[sort] ?? 0) - (b[sort] ?? 0);
       return (ascending ? comparison : -comparison) || a.rank - b.rank;
     });
   function changeSort(key: LeagueSort) {
@@ -2211,9 +2245,11 @@ function LeagueTable({
     { key: 'rank', label: 'Rank' },
     { key: 'team', label: 'Team' },
     { key: 'record', label: 'Record', numeric: true },
-    { key: 'weekly', label: `Week ${week} proj.`, numeric: true },
+    { key: 'weekly', label: `Week ${league.week} proj.`, numeric: true },
     { key: 'ros', label: 'ROS starter pts', numeric: true },
-    { key: 'players', label: 'Roster', numeric: true },
+    { key: 'expected', label: 'Expected W–L', numeric: true },
+    { key: 'playoffs', label: 'Make playoffs', numeric: true },
+    { key: 'championship', label: 'Win championship', numeric: true },
   ];
   return (
     <section className="panel league-table-panel" aria-label="League rosters">
@@ -2252,69 +2288,90 @@ function LeagueTable({
                   </button>
                 </th>
               ))}
-              <th scope="col" className="number">
-                ROS coverage
-              </th>
               <th scope="col">
                 <span className="sr-only">View roster</span>
               </th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ team: t, rank, weekly, ros, projected }) => (
-              <tr key={t.id} className={t.id === myTeamId ? 'my-team-row' : ''}>
-                <td className="league-table-rank">#{rank}</td>
-                <td>
-                  <div className="league-table-team">
-                    <TeamMark team={t} small />
-                    <div>
-                      <div className="league-table-name">
-                        <button onClick={() => onView(t.id)}>{t.name}</button>
-                        {t.id === myTeamId && (
-                          <span className="my-team-tag">YOU</span>
-                        )}
+            {rows.map(
+              ({ team: t, rank, weekly, ros, playoffs, championship }) => (
+                <tr
+                  key={t.id}
+                  className={t.id === myTeamId ? 'my-team-row' : ''}
+                >
+                  <td className="league-table-rank">#{rank}</td>
+                  <td>
+                    <div className="league-table-team">
+                      <TeamMark team={t} small />
+                      <div>
+                        <div className="league-table-name">
+                          <button onClick={() => onView(t.id)}>{t.name}</button>
+                          {t.id === myTeamId && (
+                            <span className="my-team-tag">YOU</span>
+                          )}
+                        </div>
+                        <span className="league-table-owner">{t.owner}</span>
                       </div>
-                      <span className="league-table-owner">{t.owner}</span>
                     </div>
-                  </div>
-                </td>
-                <td className="number league-table-record">
-                  {t.wins}–{t.losses}
-                  {t.ties ? `–${t.ties}` : ''}
-                </td>
-                <td className="number">{points(weekly)}</td>
-                <td className="number league-table-projection">
-                  {points(ros)}
-                </td>
-                <td className="number">
-                  {t.players.length}
-                  <span className="league-cell-detail">players</span>
-                </td>
-                <td className="number">
-                  <span
-                    className={`coverage-pill ${projected < t.players.length ? 'incomplete' : ''}`}
+                  </td>
+                  <td className="number league-table-record">
+                    {t.wins}–{t.losses}
+                    {t.ties ? `–${t.ties}` : ''}
+                  </td>
+                  <td className="number">{points(weekly)}</td>
+                  <td className="number league-table-projection">
+                    {points(ros)}
+                  </td>
+                  <td
+                    className="number league-table-record"
+                    title="Expected regular-season record before playoffs; fractional values are simulation averages"
                   >
-                    {projected}/{t.players.length} projected
-                  </span>
-                </td>
-                <td>
-                  <button
-                    className="league-view-button"
-                    aria-label={`View ${t.name} roster`}
-                    onClick={() => onView(t.id)}
-                  >
-                    View roster
-                    <ArrowRight size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
+                    {forecasts.has(t.id)
+                      ? `${points(forecasts.get(t.id)!.wins)}–${points(forecasts.get(t.id)!.losses)}`
+                      : '—'}
+                    {!!forecasts.get(t.id)?.ties && (
+                      <span className="league-cell-detail">
+                        {points(forecasts.get(t.id)!.ties)} ties
+                      </span>
+                    )}
+                  </td>
+                  <td className="number">{chance(playoffs)}</td>
+                  <td className="number league-table-projection">
+                    {chance(championship)}
+                  </td>
+                  <td>
+                    <button
+                      className="league-view-button"
+                      aria-label={`View ${t.name} roster`}
+                      onClick={() => onView(t.id)}
+                    >
+                      View roster
+                      <ArrowRight size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ),
+            )}
           </tbody>
         </table>
       </div>
+      <details className="league-forecast-details">
+        <summary>Season forecast model</summary>
+        <p>
+          {forecast?.result?.description ??
+            forecast?.error ??
+            'Simulating the remaining season…'}
+        </p>
+      </details>
       <div className="league-table-footer">
         <span>
-          {teams.length} teams · Starter projections use current lineups
+          {teams.length} teams ·{' '}
+          {forecast?.result
+            ? 'Expected W–L excludes playoffs'
+            : forecast?.error
+              ? 'Season forecasts unavailable — see model details'
+              : 'Calculating season forecasts…'}
         </span>
         <span>Click a column to sort</span>
       </div>
