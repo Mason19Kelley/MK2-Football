@@ -11,3 +11,7 @@ test-results/
 
 # Encrypted ESPN connections and local encryption key
 /data/espn-connections/
+
+# Native benchmark build output
+/benchmarks/rust-trades/target/
+/engine/trade-scorer/target/

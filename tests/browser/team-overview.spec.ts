@@ -81,7 +81,15 @@ test('matchup row opens both full rosters with the selected week projections', a
               index === 0
                 ? { ...player, byeWeek: week }
                 : index === 1
-                  ? { ...player, byeWeek: 0, weeklyOverrides: { [week]: 31.7 } }
+                  ? {
+                      ...player,
+                      byeWeek: 0,
+                      projectionSource: 'weekly-sum' as const,
+                      weeklyProjections: {
+                        ...player.weeklyProjections,
+                        [week]: 31.7,
+                      },
+                    }
                   : player,
             ),
           }

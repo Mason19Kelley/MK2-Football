@@ -67,6 +67,8 @@ Search modes cover 1:1, 1:1 plus 2:2, unequal 2:1 plus 1:2, or **all supported s
 
 Rank by your gain, the smaller gain, combined gain, the product of both gains, or scenario downside (10th percentile). The bargaining product is an offer-ranking heuristic, not acceptance likelihood. A Pareto filter removes offers dominated on both teams' mean objective gains within the same partner. Your minimum gain and the partner's minimum are independent. Points evaluations can use a different scoring horizon for the partner. Both teams must improve; point gains must exceed 0.05, while win/title gains must be positive. Acceptance probabilities require historical offer-time features and calibrated real proposal data; no acceptance model is fabricated from completed trades.
 
+The browser worker accelerates supported deterministic weekly point searches with a Rust WebAssembly scorer. Unsupported settings and module failures use the TypeScript evaluator. The shipped module is checked in, so normal builds need only Node. Rust contributors can rebuild it with `npm run build:trade-scorer` using the `wasm32-unknown-unknown` target. See [benchmark results and reproduction commands](benchmarks/rust-trades/README.md) for complete-search parity and timing measurements.
+
 ### Forecasts, bounds and outcome scenarios
 
 Known byes and current-week OUT, DOUBTFUL, INACTIVE and suspended players are unavailable. IR stays excluded in deterministic mode. Missing future weekly forecasts use a nonnegative residual ROS allocation after known forecasts. Unknown byes are assumed playable. These estimates do not predict matchups, roles or injury recovery.

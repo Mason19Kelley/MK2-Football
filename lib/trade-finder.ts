@@ -1,4 +1,5 @@
 import { League, Player } from './types';
+import type { TradeRosterEngine } from './trade-wasm';
 import {
   evaluateRoster,
   TradeEvaluation,
@@ -154,6 +155,7 @@ export async function findTrades(
   league: League,
   myTeamId: number,
   options: FindTradeOptions,
+  engine?: TradeRosterEngine,
 ) {
   const mine = league.teams.find((t) => t.id === myTeamId);
   if (!mine) throw new Error('Choose a team in this league.');
@@ -208,6 +210,13 @@ export async function findTrades(
   const waiverBaseline = options.waiverBaseline ?? true;
   const includePickup = waiverBaseline || (options.includePickup ?? false);
   const cache = new Map<string, TradeEvaluation>();
+  // Plan comparisons repeatedly score the same immutable roster arrays.
+  // Avoid rebuilding a sorted identity key for those calls; weak references
+  // release discarded plans without growing the search's bounded value cache.
+  const rosterCache = new WeakMap<
+    Player[],
+    Map<TradeHorizon, TradeEvaluation>
+  >();
   const projectionCache = new Map<
     number,
     Map<number, ReturnType<typeof playerWeek>>
@@ -221,6 +230,13 @@ export async function findTrades(
   options.onProgress?.(0, { phase, evaluatedRosters });
   const evaluate = (roster: Player[], period: TradeHorizon = horizon) => {
     abort();
+    let periods = rosterCache.get(roster);
+    const known = periods?.get(period);
+    if (known) return known;
+    if (!periods) {
+      periods = new Map();
+      rosterCache.set(roster, periods);
+    }
     const key =
       period +
       ':' +
@@ -229,9 +245,13 @@ export async function findTrades(
         .sort()
         .join(',');
     const previous = cache.get(key);
-    if (previous) return previous;
+    if (previous) {
+      periods.set(period, previous);
+      return previous;
+    }
     const value =
-      !waiverBaseline &&
+      engine?.evaluate(roster, period) ??
+      (!waiverBaseline &&
       !options.scenarios &&
       !roster.some((p) => p.projectionBounds)
         ? evaluateRoster(
@@ -248,7 +268,7 @@ export async function findTrades(
             projectionCache,
             replacementCache,
             specialistCache,
-          });
+          }));
     evaluatedRosters++;
     if (Date.now() - reportedAt >= 100) {
       options.onProgress?.(checked, { phase, evaluatedRosters });
@@ -256,6 +276,7 @@ export async function findTrades(
     }
     if (cache.size >= 10000) cache.clear();
     cache.set(key, value);
+    periods.set(period, value);
     return value;
   };
   const hasBounds = [

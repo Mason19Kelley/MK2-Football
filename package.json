@@ -3,13 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "benchmark:rust": "cargo build --release --manifest-path benchmarks/rust-trades/Cargo.toml && tsx benchmarks/rust-trades/benchmark.ts",
+    "benchmark:wasm": "cargo build --release --lib --target wasm32-unknown-unknown --manifest-path engine/trade-scorer/Cargo.toml && tsx benchmarks/rust-trades/browser.ts",
+    "build:trade-scorer": "cargo build --release --lib --target wasm32-unknown-unknown --manifest-path engine/trade-scorer/Cargo.toml && node scripts/copy-trade-scorer.mjs",
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
-    "format": "prettier --write app components lib tests *.ts *.json README.md"
+    "format": "prettier --write app components lib tests *.ts *.json README.md",
+    "benchmark:search": "tsx benchmarks/rust-trades/search.ts"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

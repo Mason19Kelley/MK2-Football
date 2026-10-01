@@ -14,6 +14,14 @@ export function optimalLineup(
       'Lineups with more than 50 starting slots are not supported.',
     );
   const usable = players.filter((p) => p[metric] !== null && p.slotId !== 21);
+  const fast = conventionalLineup(usable, expanded, metric);
+  if (fast)
+    return {
+      ...fast,
+      slots: expanded.length,
+      complete: expanded.length > 0 && fast.filled === expanded.length,
+      missing: players.filter((p) => p[metric] === null).length,
+    };
   const source = 0,
     playerStart = 1,
     slotStart = 1 + usable.length,
@@ -83,6 +91,82 @@ export function optimalLineup(
     players: selected,
     complete: expanded.length > 0 && flow === expanded.length,
     missing: players.filter((p) => p[metric] === null).length,
+  };
+}
+
+// With ordinary position slots and one RB/WR/TE flex, the optimum is the
+// strongest players at each position followed by the strongest remaining flex.
+// Keep matching for unusual eligibility and ambiguous ties so its assignment
+// behavior remains unchanged for superflex, custom slots and equal forecasts.
+function conventionalLineup(
+  players: Player[],
+  slots: League['slots'],
+  metric: 'weekly' | 'ros',
+) {
+  const native: Record<string, number> = {
+    QB: 0,
+    RB: 2,
+    WR: 4,
+    TE: 6,
+    'D/ST': 16,
+    K: 17,
+  };
+  const counts = new Map<number, number>();
+  for (const slot of slots) {
+    if (![0, 2, 4, 6, 16, 17, 23].includes(slot.id)) return;
+    counts.set(slot.id, (counts.get(slot.id) ?? 0) + 1);
+  }
+  if ((counts.get(23) ?? 0) > 1) return;
+  const groups = new Map<number, Player[]>();
+  for (const p of players) {
+    const eligibility = [
+      ...new Set(p.eligibleSlots.filter((id) => counts.has(id))),
+    ];
+    if (!eligibility.length) continue;
+    if (!Number.isFinite(p[metric])) return;
+    const position = native[p.position];
+    const expected = [
+      ...(counts.has(position) ? [position] : []),
+      ...(counts.has(23) && [2, 4, 6].includes(position) ? [23] : []),
+    ];
+    if (
+      eligibility.length !== expected.length ||
+      expected.some((id) => !eligibility.includes(id))
+    )
+      return;
+    const group = groups.get(position) ?? [];
+    group.push(p);
+    groups.set(position, group);
+  }
+  const selected = new Set<Player>();
+  const flex: Player[] = [];
+  const order = (a: Player, b: Player) => b[metric]! - a[metric]!;
+  for (const [position, group] of groups) {
+    group.sort(order);
+    const count = Math.min(counts.get(position) ?? 0, group.length);
+    if (
+      count &&
+      count < group.length &&
+      Math.abs(group[count - 1][metric]! - group[count][metric]!) <= 1e-8
+    )
+      return;
+    group.slice(0, count).forEach((p) => selected.add(p));
+    if ([2, 4, 6].includes(position)) flex.push(...group.slice(count));
+  }
+  if (counts.has(23) && flex.length) {
+    flex.sort(order);
+    if (
+      flex.length > 1 &&
+      Math.abs(flex[0][metric]! - flex[1][metric]!) <= 1e-8
+    )
+      return;
+    selected.add(flex[0]);
+  }
+  const lineup = players.filter((p) => selected.has(p));
+  return {
+    total: lineup.reduce((sum, p) => sum + p[metric]!, 0),
+    filled: lineup.length,
+    players: lineup,
   };
 }
 export function applyTrade(
