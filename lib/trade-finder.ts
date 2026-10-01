@@ -149,17 +149,71 @@ export type FindTradeOptions = {
   onProgress?: (checked: number, progress?: TradeSearchProgress) => void;
   selectedPackage?: { send: number[]; receive: number[] };
   includeNonImproving?: boolean;
+  // Win and title objectives normally rank a points shortlist. Exhaustive mode
+  // plans every package, drop and pickup for the outcome itself (much slower).
+  exhaustiveOutcomes?: boolean;
+  shortlist?: number;
 };
 export type TradeSearchProgress = {
-  phase: 'preparing' | 'searching';
+  phase: 'preparing' | 'searching' | 'ranking';
   evaluatedRosters: number;
+  total?: number;
 };
+export type TradeSearchResult = {
+  candidates: TradeCandidate[];
+  skipped: string[];
+  checked: number;
+  matched: number;
+  unplannable: number;
+  frontierCount?: number;
+  warnings: string[];
+  baseline: RosterMove;
+  baselineTotal: number;
+  baselineUpperTotal: number;
+  scope: string;
+};
+export const outcomeShortlistSize = 50;
+export const outcomeSamples = 512;
+// Whether a search ranks a points shortlist by simulated outcomes.
+export function usesOutcomeShortlist(options: FindTradeOptions) {
+  return (
+    (options.objective ?? 'points') !== 'points' && !options.exhaustiveOutcomes
+  );
+}
+// The deterministic points search that builds the outcome shortlist. Both
+// teams must gain points; the outcome thresholds apply afterwards.
+export function shortlistOptions(options: FindTradeOptions): FindTradeOptions {
+  return {
+    ...options,
+    objective: 'points',
+    scenarios: undefined,
+    playoffs: undefined,
+    partnerHorizon: undefined,
+    ranking: options.ranking === 'downside' ? 'mine' : options.ranking,
+    minimumGain: 0,
+    partnerMinimumGain: 0,
+    paretoOnly: false,
+    limit: options.shortlist ?? outcomeShortlistSize,
+  };
+}
+function outcomeWarnings(options: FindTradeOptions) {
+  const warnings: string[] = [];
+  if (options.scenarios)
+    warnings.push(
+      'Scenario probabilities reflect your assumptions, not a calibrated forecast. Lineups are chosen before score noise is drawn.',
+    );
+  if (options.objective === 'title')
+    warnings.push(
+      'Declared bracket uses wins/ties, points-for, then team ID; higher seeds win playoff ties. Confirm these rules match your league.',
+    );
+  return warnings;
+}
 export async function findTrades(
   league: League,
   myTeamId: number,
   options: FindTradeOptions,
   engine?: TradeRosterEngine,
-) {
+): Promise<TradeSearchResult> {
   const mine = league.teams.find((t) => t.id === myTeamId);
   if (!mine) throw new Error('Choose a team in this league.');
   if (
@@ -206,6 +260,8 @@ export async function findTrades(
   validateOutcomeSchedule(league, horizon, objective, options.playoffs);
   if (league.tradesLocked)
     throw new Error('Trades are locked for this league.');
+  if (usesOutcomeShortlist(options))
+    return rankShortlist(league, myTeamId, options, horizon, limit, engine);
   const abort = () => options.signal?.throwIfAborted();
   abort();
   // Legacy opt-out retains the original streaming baseline. Default policy is a
@@ -345,9 +401,13 @@ export async function findTrades(
   for (const team of baselineTeams) {
     abort();
     try {
+      // Sorting compares each roster plan many times; simulate each league once.
+      const utilities = new WeakMap<Player[], TradeEvaluation>();
       const evaluateUtility = (players: Player[]) => {
         const value = evaluate(players);
         if (objective === 'points') return value;
+        const known = utilities.get(players);
+        if (known) return known;
         const all = new Map(currentEvaluations);
         all.set(team.id, value);
         const outcome = evaluateLeagueOutcomes(
@@ -358,7 +418,9 @@ export async function findTrades(
           options.playoffs,
         ).get(team.id)!;
         const utility = objective === 'title' ? outcome.title! : outcome.wins;
-        return { ...value, total: utility, upperTotal: utility };
+        const result = { ...value, total: utility, upperTotal: utility };
+        utilities.set(players, result);
+        return result;
       };
       const base = waiverBaseline
         ? bestNoTradeMove(league, team, {
@@ -767,14 +829,7 @@ export async function findTrades(
     warnings.push(
       'Legacy season-total mode uses ROS totals. Choose a weekly period to use weekly overrides, or upload a week-0 ROS total.',
     );
-  if (options.scenarios)
-    warnings.push(
-      'Scenario probabilities reflect your assumptions, not a calibrated forecast. Lineups are chosen before score noise is drawn.',
-    );
-  if (objective === 'title')
-    warnings.push(
-      'Declared bracket uses wins/ties, points-for, then team ID; higher seeds win playoff ties. Confirm these rules match your league.',
-    );
+  warnings.push(...outcomeWarnings(options));
   if (
     league.teams.some((t) =>
       t.players.some((p) => p.returnWeek && p.slotId === 21),
@@ -796,5 +851,192 @@ export async function findTrades(
     baselineUpperTotal: before.upperTotal ?? before.total,
     scope:
       'All selected 1–2 player packages and evaluated legal roster plans; scenario rankings are optimal only for the configured sampled model.',
+  };
+}
+
+// Stage two of a win or title search. Rosters, drops, pickups and no-trade
+// baselines come from the points shortlist; each shortlisted trade is then
+// simulated with the full league schedule and bracket. The shortlist is chosen
+// without simulated outcomes, so ranking it does not reward lucky draws.
+async function rankShortlist(
+  league: League,
+  myTeamId: number,
+  options: FindTradeOptions,
+  horizon: TradeHorizon,
+  limit: number,
+  engine?: TradeRosterEngine,
+): Promise<TradeSearchResult> {
+  const objective = options.objective!;
+  const shortlist = await findTrades(
+    league,
+    myTeamId,
+    shortlistOptions(options),
+    engine,
+  );
+  const abort = () => options.signal?.throwIfAborted();
+  const scenarios = { ...options.scenarios!, samples: outcomeSamples };
+  const scenarioCache = createScenarioCache(league, scenarios);
+  const cache = new Map<string, TradeEvaluation>();
+  const evaluate = (roster: Player[]) => {
+    abort();
+    const key = roster
+      .map((p) => `${p.id}:${p.slotId}`)
+      .sort()
+      .join(',');
+    let value = cache.get(key);
+    if (!value) {
+      value = evaluateForecastRoster(league, roster, horizon, {
+        scenarios,
+        scenarioCache,
+        streaming: false,
+      });
+      cache.set(key, value);
+    }
+    return value;
+  };
+  const total = shortlist.candidates.length;
+  const report = (done: number) =>
+    options.onProgress?.(done, {
+      phase: 'ranking',
+      evaluatedRosters: cache.size,
+      total,
+    });
+  report(0);
+  const current = new Map(league.teams.map((t) => [t.id, evaluate(t.players)]));
+  if ([...current.values()].some((e) => !projected(e)))
+    throw new Error(
+      'Win scenarios need complete forecasts for every team’s current roster.',
+    );
+  const outcomes = (changes: [number, TradeEvaluation][]) => {
+    const all = new Map(current);
+    for (const [id, evaluation] of changes) all.set(id, evaluation);
+    return evaluateLeagueOutcomes(
+      league,
+      all,
+      horizon,
+      objective,
+      options.playoffs,
+    );
+  };
+  // Each team's no-trade outcome changes only its own roster, as in the
+  // exhaustive search.
+  const beforeOutcomes = new Map<number, OutcomeSummary>();
+  const before = (teamId: number, evaluation: TradeEvaluation) => {
+    let outcome = beforeOutcomes.get(teamId);
+    if (!outcome) {
+      outcome = outcomes([[teamId, evaluation]]).get(teamId)!;
+      beforeOutcomes.set(teamId, outcome);
+    }
+    return outcome;
+  };
+  const impact = (
+    base: TradeEvaluation,
+    after: TradeEvaluation,
+    oldOutcome: OutcomeSummary,
+    nextOutcome: OutcomeSummary,
+  ): Impact => ({
+    before: base,
+    after,
+    gain: after.total - (base.upperTotal ?? base.total),
+    utilityGain:
+      objective === 'title'
+        ? nextOutcome.title! - oldOutcome.title!
+        : nextOutcome.wins - oldOutcome.wins,
+    uncertainty: summarizeGains(nextOutcome.values, oldOutcome.values),
+    outcomes: { before: oldOutcome, after: nextOutcome },
+  });
+  const ranked: TradeCandidate[] = [];
+  const frontiers = new Map<number, TradeCandidate[]>();
+  let matched = 0;
+  for (const [index, c] of shortlist.candidates.entries()) {
+    const myBase = evaluate(c.baseline!.mine.roster),
+      partnerBase = evaluate(c.baseline!.partner.roster),
+      after = evaluate(c.plan.mine.roster),
+      partnerAfter = evaluate(c.plan.partner.roster);
+    if ([myBase, partnerBase, after, partnerAfter].every(projected)) {
+      const next = outcomes([
+        [myTeamId, after],
+        [c.partnerId, partnerAfter],
+      ]);
+      const candidate: TradeCandidate = {
+        ...c,
+        objective,
+        scenarios,
+        playoffs: options.playoffs,
+        searchPolicy: {
+          ranking: options.ranking,
+          minimumGain: options.minimumGain,
+          partnerMinimumGain: options.partnerMinimumGain,
+        },
+        mine: impact(
+          myBase,
+          after,
+          before(myTeamId, myBase),
+          next.get(myTeamId)!,
+        ),
+        partner: impact(
+          partnerBase,
+          partnerAfter,
+          before(c.partnerId, partnerBase),
+          next.get(c.partnerId)!,
+        ),
+      };
+      if (
+        options.includeNonImproving ||
+        improvesBoth(candidate, options.minimumGain, options.partnerMinimumGain)
+      ) {
+        matched++;
+        if (options.paretoOnly) {
+          const frontier = frontiers.get(c.partnerId) ?? [];
+          if (!frontier.some((f) => dominatesTrade(f, candidate)))
+            frontiers.set(c.partnerId, [
+              ...frontier.filter((f) => !dominatesTrade(candidate, f)),
+              candidate,
+            ]);
+        } else ranked.push(candidate);
+      }
+    }
+    report(index + 1);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  const frontierCount = options.paretoOnly
+    ? [...frontiers.values()].reduce((sum, f) => sum + f.length, 0)
+    : undefined;
+  const candidates = [...ranked, ...[...frontiers.values()].flat()]
+    .sort((a, b) => rankTrades(a, b, options.ranking))
+    .slice(0, limit);
+  // Pickup-free gains use the same simulated rosters as the shown gains.
+  for (const candidate of candidates) {
+    const partner = league.teams.find((t) => t.id === candidate.partnerId)!;
+    const noPickup = planTrade(
+      league,
+      league.teams.find((t) => t.id === myTeamId)!.players,
+      partner.players,
+      candidate.send.map((p) => p.id),
+      candidate.receive.map((p) => p.id),
+      { evaluate, evaluatePartner: evaluate, includePickup: false },
+    );
+    candidate.tradeOnly = {
+      mine: evaluate(noPickup.mine.roster).total - candidate.mine.before.total,
+      partner:
+        evaluate(noPickup.partner.roster).total -
+        candidate.partner.before.total,
+    };
+  }
+  const baselineTotal = evaluate(shortlist.baseline.roster).total;
+  const label = objective === 'title' ? 'championship' : 'expected-win';
+  return {
+    ...shortlist,
+    candidates,
+    matched,
+    frontierCount,
+    warnings: [
+      `Ranked by ${label} odds from ${outcomeSamples} season simulations of the top ${total} trades by projected points that improve both teams. Drops, pickups and no-trade baselines are chosen for points. Turn on the exhaustive search to optimize them for ${label} odds instead (much slower).`,
+      ...shortlist.warnings,
+      ...outcomeWarnings(options),
+    ],
+    baselineTotal,
+    baselineUpperTotal: baselineTotal,
+    scope: `The top ${total} point-improving trades among all selected 1–2 player packages, re-ranked by simulated ${label} odds.`,
   };
 }

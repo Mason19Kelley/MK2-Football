@@ -17,7 +17,10 @@ export type ScenarioSettings = {
   scoreCv: number;
   roleCv: number;
   teamCorrelation: number;
+  // Distribution of a player's weekly score around their forecast.
+  scoreShape: ScoreShape;
 };
+export type ScoreShape = 'gamma' | 'lognormal';
 export const defaultScenarioSettings: ScenarioSettings = {
   samples: 64,
   seed: 2026,
@@ -25,6 +28,7 @@ export const defaultScenarioSettings: ScenarioSettings = {
   scoreCv: 1,
   roleCv: 0.1,
   teamCorrelation: 0.2,
+  scoreShape: 'gamma',
 };
 export function validateScenarios(s: ScenarioSettings) {
   if (
@@ -43,7 +47,8 @@ export function validateScenarios(s: ScenarioSettings) {
     s.roleCv > 2 ||
     !Number.isFinite(s.teamCorrelation) ||
     s.teamCorrelation < 0 ||
-    s.teamCorrelation > 1
+    s.teamCorrelation > 1 ||
+    !['gamma', 'lognormal'].includes(s.scoreShape)
   )
     throw new Error(
       'Invalid scenario assumptions. Use 8–512 samples, probabilities from 0 to 1, and variation from 0 to 2.',
@@ -61,7 +66,7 @@ const scoreSpread: Record<Position, { fixed: number; share: number }> = {
   K: { fixed: 2, share: 0.25 },
   'D/ST': { fixed: 3, share: 0.37 },
 };
-// D/ST can score below zero, so its lognormal is drawn on a shifted score.
+// D/ST can score below zero, so its weekly score is drawn on a shifted scale.
 const scoreShift: Partial<Record<Position, number>> = { 'D/ST': 5 };
 export function scoreStdDev(
   position: Position,
@@ -71,9 +76,28 @@ export function scoreStdDev(
   const { fixed, share } = scoreSpread[position];
   return scale * (fixed + share * Math.max(0, forecast));
 }
-// Lognormal with the given mean and standard deviation driven by a standard
-// normal draw: no impossible negative weeks and a long tail of big ones.
-export function lognormalScore(
+// Standard normal CDF (Abramowitz–Stegun 7.1.26, error below 1.5e-7).
+function normalCdf(x: number) {
+  const t = 1 / (1 + 0.3275911 * (Math.abs(x) / Math.SQRT2));
+  const erf =
+    1 -
+    t *
+      (0.254829592 +
+        t *
+          (-0.284496736 +
+            t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) *
+      Math.exp(-(x * x) / 2);
+  return x >= 0 ? 0.5 * (1 + erf) : 0.5 * (1 - erf);
+}
+// A weekly score with the given mean and standard deviation, driven by a
+// standard normal draw so shared team noise still applies. Both shapes are
+// non-negative and right-skewed. Backtests found the lognormal's low tail too
+// thin: real bad weeks fall below its 10th percentile about twice as often.
+// The gamma has a heavier low tail and piles some probability at zero for
+// low projections. It uses the Wilson–Hilferty transform, rescaled so the
+// mean is exact even when the cube is clamped at zero.
+export function scoreDraw(
+  shape: ScoreShape,
   position: Position,
   mean: number,
   sd: number,
@@ -82,8 +106,19 @@ export function lognormalScore(
   const shift = scoreShift[position] ?? 0;
   const center = mean + shift;
   if (center <= 0 || sd === 0) return mean + sd * z;
-  const s2 = Math.log(1 + (sd / center) ** 2);
-  return center * Math.exp(Math.sqrt(s2) * z - s2 / 2) - shift;
+  const cv = sd / center;
+  if (shape === 'lognormal') {
+    const s2 = Math.log(1 + cv ** 2);
+    return center * Math.exp(Math.sqrt(s2) * z - s2 / 2) - shift;
+  }
+  const c = cv ** 2 / 9;
+  const b = Math.sqrt(c);
+  const t = (1 - c) / b;
+  const expected =
+    b ** 3 *
+    ((t ** 3 + 3 * t) * normalCdf(t) +
+      ((t ** 2 + 2) * Math.exp(-(t * t) / 2)) / Math.sqrt(2 * Math.PI));
+  return (center * Math.max(0, 1 - c + b * z) ** 3) / expected - shift;
 }
 // Stateless keyed draws give every trade exactly the same player/week scenarios.
 export function uniform(key: string) {
@@ -486,7 +521,11 @@ export function evaluateForecastRoster(
           (p.scoreStdDev ??
             scoreStdDev(p.position, mean / remaining, settings.scoreCv)) *
           Math.sqrt(remaining);
-        return sum + banked + lognormalScore(p.position, mean, sd, noise);
+        return (
+          sum +
+          banked +
+          scoreDraw(settings.scoreShape, p.position, mean, sd, noise)
+        );
       }, 0);
       scenarioWeeks[week].push(score);
       scenarioTotals[sample] += score;

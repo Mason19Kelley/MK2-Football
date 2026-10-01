@@ -10,13 +10,14 @@ import {
 import {
   dominatesTrade,
   findTrades,
+  outcomeSamples,
   rankTrades,
   TradeCandidate,
 } from '../lib/trade-finder';
 import {
   evaluateForecastRoster,
   defaultScenarioSettings,
-  lognormalScore,
+  scoreDraw,
   scoreStdDev,
   summarizeGains,
 } from '../lib/trade-evaluation';
@@ -592,6 +593,50 @@ test('win-ranked finder evaluates both changed rosters and manual review preserv
   );
 });
 
+test('outcome objectives re-rank a points shortlist and agree with the exhaustive search', async () => {
+  const league = fixture();
+  league.teams.push(
+    team(3, [player(7, [20], 2), player(8, [10], 4)]),
+    team(4, [player(9, [10], 2), player(10, [20], 4)]),
+  );
+  league.matchups = [
+    { id: 1, weeks: [1], homeId: 1, awayId: 3 },
+    { id: 2, weeks: [1], homeId: 2, awayId: 4 },
+  ];
+  const settings = { ...scenarios, samples: 8 };
+  const search = { ...options, partnerId: 2, objective: 'wins' as const };
+  const shortlisted = await findTrades(league, 1, {
+    ...search,
+    scenarios: settings,
+  });
+  const exhaustive = await findTrades(league, 1, {
+    ...search,
+    scenarios: settings,
+    exhaustiveOutcomes: true,
+  });
+  const key = (t: TradeCandidate) =>
+    `${t.send.map((p) => p.id)}>${t.receive.map((p) => p.id)}`;
+  assert.deepEqual(
+    shortlisted.candidates.map(key),
+    exhaustive.candidates.map(key),
+  );
+  assert.ok(shortlisted.candidates.length > 0);
+  for (const [i, t] of shortlisted.candidates.entries()) {
+    assert.equal(t.scenarios?.samples, outcomeSamples);
+    assert.equal(t.objective, 'wins');
+    assert.ok(t.mine.gain > 0 && t.partner.gain > 0);
+    assert.equal(t.mine.utilityGain, exhaustive.candidates[i].mine.utilityGain);
+    assert.equal(t.mine.uncertainty?.samples, outcomeSamples);
+  }
+  assert.match(shortlisted.warnings[0], /top \d+ trades by projected points/);
+  const one = await findTrades(league, 1, {
+    ...search,
+    scenarios: settings,
+    shortlist: 1,
+  });
+  assert.ok(one.candidates.length <= 1);
+});
+
 test('championship utility captures damage from strengthening a direct rival despite a points increase', () => {
   const league = {
     ...fixture(),
@@ -763,35 +808,50 @@ test('weekly scoring spread is position-specific and wider for low forecasts', (
   assert.equal(scoreStdDev('WR', 13, 0), 0);
 });
 
-test('lognormal weekly scores keep the forecast mean and spread without negative weeks', () => {
+test('weekly score shapes keep the forecast mean and spread without impossible weeks', () => {
   const draws = 20000;
-  for (const [pos, mean] of [
-    ['WR', 13],
-    ['RB', 4],
-    ['D/ST', 6],
-  ] as const) {
-    const sd = scoreStdDev(pos, mean, 1);
-    const scores = Array.from({ length: draws }, (_, i) => {
-      // Normal quantiles via a stable inverse-erf approximation.
-      const u = (i + 0.5) / draws;
-      const t = Math.sqrt(-2 * Math.log(Math.min(u, 1 - u)));
-      const z =
-        Math.sign(u - 0.5) *
-        (t -
-          (2.515517 + 0.802853 * t + 0.010328 * t * t) /
-            (1 + 1.432788 * t + 0.189269 * t * t + 0.001308 * t * t * t));
-      return lognormalScore(pos, mean, sd, z);
-    });
-    const avg = scores.reduce((s, n) => s + n, 0) / draws;
-    const spread = Math.sqrt(
-      scores.reduce((s, n) => s + (n - avg) ** 2, 0) / draws,
+  // Evenly spaced normal quantiles via a stable inverse-CDF approximation.
+  const zs = Array.from({ length: draws }, (_, i) => {
+    const u = (i + 0.5) / draws;
+    const t = Math.sqrt(-2 * Math.log(Math.min(u, 1 - u)));
+    return (
+      Math.sign(u - 0.5) *
+      (t -
+        (2.515517 + 0.802853 * t + 0.010328 * t * t) /
+          (1 + 1.432788 * t + 0.189269 * t * t + 0.001308 * t * t * t))
     );
-    assert.ok(Math.abs(avg - mean) / mean < 0.02, `${pos} mean ${avg}`);
-    assert.ok(Math.abs(spread - sd) / sd < 0.05, `${pos} sd ${spread}`);
-    assert.ok(Math.min(...scores) >= (pos === 'D/ST' ? -5 : 0));
-    // Right-skewed: the median sits below the mean.
-    const sorted = [...scores].sort((a, b) => a - b);
-    assert.ok(sorted[draws / 2] < mean);
-  }
-  assert.equal(lognormalScore('WR', 10, 0, 2), 10);
+  });
+  const low10: Record<string, number> = {};
+  for (const shape of ['gamma', 'lognormal'] as const)
+    for (const [pos, mean] of [
+      ['WR', 13],
+      ['RB', 4],
+      ['WR', 1],
+      ['D/ST', 6],
+    ] as const) {
+      const sd = scoreStdDev(pos, mean, 1);
+      const scores = zs.map((z) => scoreDraw(shape, pos, mean, sd, z));
+      const avg = scores.reduce((s, n) => s + n, 0) / draws;
+      const spread = Math.sqrt(
+        scores.reduce((s, n) => s + (n - avg) ** 2, 0) / draws,
+      );
+      const label = `${shape} ${pos} ${mean}`;
+      assert.ok(Math.abs(avg - mean) / mean < 0.02, `${label} mean ${avg}`);
+      // A 1-point WR has CV near 3, where the gamma transform runs ~6% wide.
+      assert.ok(Math.abs(spread - sd) / sd < 0.08, `${label} sd ${spread}`);
+      assert.ok(Math.min(...scores) >= (pos === 'D/ST' ? -5 : 0));
+      // Right-skewed: the median sits below the mean.
+      const sorted = [...scores].sort((a, b) => a - b);
+      assert.ok(sorted[draws / 2] < mean, label);
+      low10[label] = sorted[draws / 10];
+    }
+  // The gamma's low tail is heavier, matching league backtests.
+  assert.ok(low10['gamma WR 13'] < low10['lognormal WR 13'] - 0.5);
+  // Very low projections put real probability on a zero week.
+  const tiny = zs.map((z) =>
+    scoreDraw('gamma', 'WR', 1, scoreStdDev('WR', 1, 1), z),
+  );
+  assert.ok(tiny.filter((n) => n === 0).length / draws > 0.3);
+  assert.equal(scoreDraw('gamma', 'WR', 10, 0, 2), 10);
+  assert.equal(scoreDraw('lognormal', 'WR', 10, 0, 2), 10);
 });

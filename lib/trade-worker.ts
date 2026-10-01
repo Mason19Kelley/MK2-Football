@@ -1,4 +1,9 @@
-import { findTrades, FindTradeOptions } from './trade-finder';
+import {
+  findTrades,
+  FindTradeOptions,
+  shortlistOptions,
+  usesOutcomeShortlist,
+} from './trade-finder';
 import { League } from './types';
 import { createWasmScorer, TradeRosterEngine } from './trade-wasm';
 const scope = globalThis as unknown as {
@@ -22,7 +27,13 @@ scope.onmessage = async ({ data }) => {
       progress: { phase: 'preparing', evaluatedRosters: 0 },
     });
     try {
-      engine = await createWasmScorer(data.league, data.options);
+      // Outcome searches score their points shortlist with the fast engine.
+      engine = await createWasmScorer(
+        data.league,
+        usesOutcomeShortlist(data.options)
+          ? shortlistOptions(data.options)
+          : data.options,
+      );
     } catch (error) {
       console.warn('WASM scorer unavailable; using TypeScript.', error);
     }

@@ -3621,6 +3621,9 @@ h1 {
 .scenario-backtest h3 {
   margin: 8px 0 12px;
 }
+.scenario-backtest .trade-odds-table tr.muted {
+  color: var(--muted);
+}
 .scenario-backtest .button {
   margin-bottom: 16px;
 }

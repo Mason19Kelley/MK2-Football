@@ -8,6 +8,8 @@ import { TradeWeeklyComparison } from './trade-weekly-comparison';
 import { TradeHorizon, horizonLabels } from '@/lib/weekly-trades';
 import {
   findTrades,
+  outcomeSamples,
+  outcomeShortlistSize,
   TradeCandidate,
   TradeRanking,
   TradeSearchProgress,
@@ -16,6 +18,7 @@ import { runTradeSearch } from '@/lib/trade-search-client';
 import {
   defaultScenarioSettings,
   ScenarioSettings,
+  ScoreShape,
 } from '@/lib/trade-evaluation';
 import { PlayoffScenario, TradeObjective } from '@/lib/trade-outcomes';
 import { forecastSnapshot } from '@/lib/forecast-snapshots';
@@ -51,6 +54,7 @@ export function TradeFinder({
     defaultScenarioSettings,
   );
   const [objective, setObjective] = useState<TradeObjective>('points');
+  const [exhaustiveOutcomes, setExhaustiveOutcomes] = useState(false);
   const [partnerMinimum, setPartnerMinimum] = useState('1');
   const [partnerHorizon, setPartnerHorizon] = useState<TradeHorizon | ''>('');
   const [playoffs, setPlayoffs] = useState<PlayoffScenario>({
@@ -180,6 +184,7 @@ export function TradeFinder({
     scenarioEnabled,
     scenarioSettings,
     objective,
+    exhaustiveOutcomes,
     partnerMinimum,
     partnerHorizon,
     playoffs,
@@ -227,6 +232,7 @@ export function TradeFinder({
         paretoOnly,
         scenarios: scenarioEnabled ? scenarioSettings : undefined,
         objective,
+        exhaustiveOutcomes: objective !== 'points' && exhaustiveOutcomes,
         playoffs: objective === 'title' ? playoffs : undefined,
         partnerMinimumGain: Number(partnerMinimum),
         partnerHorizon: partnerHorizon || undefined,
@@ -436,73 +442,93 @@ export function TradeFinder({
                 setRanking('mine');
             }}
           />{' '}
-          Model availability, role changes and scoring uncertainty
+          Model availability, role changes and scoring uncertainty in the search
+          (much slower: each trade is simulated {scenarioSettings.samples}{' '}
+          times)
         </label>
-        {scenarioEnabled && (
-          <>
-            <div className="finder-controls">
-              {(
-                [
-                  ['samples', 'Scenario samples', 8, 512, 8],
-                  ['seed', 'Scenario seed', 0, 2147483647, 1],
-                  [
-                    'availability',
-                    'Weekly availability probability',
-                    0,
-                    1,
-                    0.01,
-                  ],
-                  [
-                    'scoreCv',
-                    'Scoring variation (× position defaults)',
-                    0,
-                    2,
-                    0.01,
-                  ],
-                  [
-                    'roleCv',
-                    'Role variation (fraction of forecast)',
-                    0,
-                    2,
-                    0.01,
-                  ],
-                  [
-                    'teamCorrelation',
-                    'Shared NFL-team scoring correlation',
-                    0,
-                    1,
-                    0.01,
-                  ],
-                ] as const
-              ).map(([key, label, min, max, step]) => (
-                <label key={key}>
-                  {label}
-                  <input
-                    type="number"
-                    min={min}
-                    max={max}
-                    step={step}
-                    value={scenarioSettings[key]}
-                    onChange={(e) =>
-                      setScenarioSettings({
-                        ...scenarioSettings,
-                        [key]: Number(e.target.value),
-                      })
-                    }
-                  />
-                </label>
-              ))}
-            </div>
-            <p className="finder-note">
-              These are editable assumptions; check them against your league’s
-              past weeks below. Availability draws are independent by week; role
-              changes persist across the horizon. Lineups use availability and
-              role information before scoring noise is drawn. IR return
-              scenarios require room to activate the player.
-            </p>
-            <ScenarioBacktest league={league} settings={scenarioSettings} />
-          </>
+        {objective !== 'points' && (
+          <label className="pickup-option">
+            <input
+              type="checkbox"
+              checked={exhaustiveOutcomes}
+              onChange={(e) => setExhaustiveOutcomes(e.target.checked)}
+            />{' '}
+            Exhaustive search: simulate every trade and plan drops, pickups and
+            no-trade baselines for{' '}
+            {objective === 'title' ? 'championship' : 'win'} odds (very slow).
+            Otherwise the top {outcomeShortlistSize} point-improving trades are
+            re-ranked with {outcomeSamples} season simulations each.
+          </label>
         )}
+        {/* Settings and the backtest stay available with scenarios off, so
+            checking calibration never switches the search into scenario mode. */}
+        <details className="league-forecast-details">
+          <summary>Scenario settings and backtest</summary>
+          <div className="finder-controls">
+            {(
+              [
+                ['samples', 'Scenario samples', 8, 512, 8],
+                ['seed', 'Scenario seed', 0, 2147483647, 1],
+                ['availability', 'Weekly availability probability', 0, 1, 0.01],
+                [
+                  'scoreCv',
+                  'Scoring variation (× position defaults)',
+                  0,
+                  2,
+                  0.01,
+                ],
+                ['roleCv', 'Role variation (fraction of forecast)', 0, 2, 0.01],
+                [
+                  'teamCorrelation',
+                  'Shared NFL-team scoring correlation',
+                  0,
+                  1,
+                  0.01,
+                ],
+              ] as const
+            ).map(([key, label, min, max, step]) => (
+              <label key={key}>
+                {label}
+                <input
+                  type="number"
+                  min={min}
+                  max={max}
+                  step={step}
+                  value={scenarioSettings[key]}
+                  onChange={(e) =>
+                    setScenarioSettings({
+                      ...scenarioSettings,
+                      [key]: Number(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            ))}
+            <label>
+              Weekly score shape
+              <select
+                value={scenarioSettings.scoreShape}
+                onChange={(e) =>
+                  setScenarioSettings({
+                    ...scenarioSettings,
+                    scoreShape: e.target.value as ScoreShape,
+                  })
+                }
+              >
+                <option value="gamma">Gamma (heavier low tail)</option>
+                <option value="lognormal">Lognormal</option>
+              </select>
+            </label>
+          </div>
+          <p className="finder-note">
+            These are editable assumptions; check them against your league’s
+            past weeks below. Availability draws are independent by week; role
+            changes persist across the horizon. Lineups use availability and
+            role information before scoring noise is drawn. IR return scenarios
+            require room to activate the player.
+          </p>
+          <ScenarioBacktest league={league} settings={scenarioSettings} />
+        </details>
         {objective === 'title' && (
           <>
             <div className="finder-controls">
@@ -632,7 +658,9 @@ export function TradeFinder({
         {running &&
           (progress.phase === 'preparing'
             ? `Preparing no-trade baselines… ${progress.evaluatedRosters.toLocaleString()} roster plans evaluated.`
-            : `Checked ${checked.toLocaleString()} trades… ${progress.evaluatedRosters.toLocaleString()} roster plans evaluated.`)}
+            : progress.phase === 'ranking'
+              ? `Simulating ${objective === 'title' ? 'championship' : 'win'} odds for the top trades… ${checked.toLocaleString()} of ${(progress.total ?? 0).toLocaleString()}.`
+              : `Checked ${checked.toLocaleString()} trades… ${progress.evaluatedRosters.toLocaleString()} roster plans evaluated.`)}
         {result &&
           (result.matched
             ? `Showing ${result.candidates.length} of ${result.matched.toLocaleString()} improving trades (${result.checked.toLocaleString()} checked).`
@@ -773,7 +801,24 @@ export function TradeFinder({
                     : ''}
                 </p>
               )}
-              {t.mine.uncertainty && (
+              {t.objective && t.objective !== 'points' && (
+                <p className="finder-note">
+                  <OutcomeChange
+                    who="Your"
+                    objective={t.objective}
+                    impact={t.mine}
+                  />
+                  ;{' '}
+                  <OutcomeChange
+                    who={`${partner.name}’s`}
+                    objective={t.objective}
+                    impact={t.partner}
+                  />
+                  . ± is a 95% interval from {t.mine.uncertainty?.samples}{' '}
+                  paired season simulations.
+                </p>
+              )}
+              {t.mine.uncertainty && t.objective === 'points' && (
                 <p className="finder-note">
                   Your scenario gain: 10th percentile{' '}
                   {points(t.mine.uncertainty.p10)}; improvement in{' '}
@@ -862,5 +907,34 @@ function LineupDetails({ children }: { children: ReactNode }) {
       <summary>See starting lineup changes</summary>
       {open ? children : null}
     </details>
+  );
+}
+
+// A simulated change in title probability or expected wins, with a 95% interval.
+function OutcomeChange({
+  who,
+  objective,
+  impact,
+}: {
+  who: string;
+  objective: TradeObjective;
+  impact: TradeCandidate['mine'];
+}) {
+  if (impact.utilityGain === undefined || !impact.outcomes) return null;
+  const title = objective === 'title';
+  const value = (n: number) =>
+    title ? `${(100 * n).toFixed(1)}%` : n.toFixed(2);
+  const change = (n: number) =>
+    title ? `${(100 * n).toFixed(1)} pts` : n.toFixed(2);
+  const { before, after } = impact.outcomes;
+  return (
+    <>
+      {who} {title ? 'title odds' : 'expected wins'}{' '}
+      {value(title ? before.title! : before.wins)} →{' '}
+      {value(title ? after.title! : after.wins)} (
+      {impact.utilityGain >= 0 ? '+' : ''}
+      {change(impact.utilityGain)} ±{' '}
+      {change(1.96 * (impact.uncertainty?.standardError ?? 0))})
+    </>
   );
 }

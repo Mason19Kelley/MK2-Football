@@ -66,6 +66,7 @@ function fixture(): TradeSeasonOddsInput {
       scoreCv: 0,
       roleCv: 0,
       teamCorrelation: 0,
+      scoreShape: 'gamma',
     },
   };
 }

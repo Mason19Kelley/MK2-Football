@@ -681,16 +681,18 @@ export function parseBacktestWeek(
       const entries = side?.rosterForCurrentScoringPeriod?.entries;
       if (!side || !Number.isInteger(side.teamId) || !entries?.length) continue;
       const starters: BacktestStarter[] = [];
+      const bench: BacktestStarter[] = [];
       let complete = true;
       for (const entry of entries) {
         const p = entry.playerPoolEntry?.player;
         if (
           !p ||
-          [20, 21, 25].includes(entry.lineupSlotId) ||
+          [21, 25].includes(entry.lineupSlotId) ||
           isIDPSlot(entry.lineupSlotId) ||
           !isSupportedPlayer(p)
         )
           continue;
+        const benched = entry.lineupSlotId === 20;
         const stat = (source: number) =>
           finite(
             p.stats?.find(
@@ -703,21 +705,23 @@ export function parseBacktestWeek(
           );
         const projection = stat(1);
         if (projection === null) {
+          // An unprojected bench player is left out; a starter voids the week.
+          if (benched) continue;
           complete = false;
           break;
         }
-        starters.push({
+        (benched ? bench : starters).push({
           id: p.id,
           position: pos[p.defaultPositionId!]!,
           nflTeam: nfl[p.proTeamId ?? 0] ?? 'FA',
           projection,
-          // Inactive starters have no stat line and scored zero.
+          // Inactive players have no stat line and scored zero.
           actual:
             stat(0) ?? finite(entry.playerPoolEntry?.appliedStatTotal) ?? 0,
         });
       }
       if (complete && starters.length)
-        teamWeeks.push({ week, teamId: side.teamId!, starters });
+        teamWeeks.push({ week, teamId: side.teamId!, starters, bench });
       else skipped++;
     }
   }

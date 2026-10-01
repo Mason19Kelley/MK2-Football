@@ -1,7 +1,8 @@
 import {
-  backtestImproves,
+  BacktestComparison,
   BacktestData,
   BacktestReport,
+  compareBacktests,
   runBacktest,
 } from './backtest';
 import type { ScenarioSettings } from './trade-evaluation';
@@ -14,7 +15,7 @@ export type BacktestJob = {
 export type BacktestResult = {
   baseline?: BacktestReport;
   candidate?: BacktestReport;
-  improves?: boolean;
+  comparison?: BacktestComparison;
   error?: string;
 };
 const scope = globalThis as unknown as {
@@ -28,7 +29,7 @@ scope.onmessage = ({ data: { data, baseline, candidate } }) => {
     scope.postMessage({
       baseline: base,
       ...(next
-        ? { candidate: next, improves: backtestImproves(base, next) }
+        ? { candidate: next, comparison: compareBacktests(base, next) }
         : {}),
     });
   } catch (error) {

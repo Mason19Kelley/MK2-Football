@@ -119,9 +119,10 @@ test('win scenarios, combined search and review carry the same gains into the si
   await finder.getByLabel('Trade size').selectOption('all');
   await finder.getByText('Evaluation assumptions').click();
   await finder.getByLabel('Objective', { exact: true }).selectOption('wins');
+  await finder.getByText('Scenario settings and backtest').click();
   await finder.getByLabel('Scenario samples').fill('8');
   await finder.getByLabel('Weekly availability probability').fill('1');
-  await finder.getByLabel('Scoring variation (fraction of points)').fill('0');
+  await finder.getByLabel('Scoring variation (× position defaults)').fill('0');
   await finder.getByLabel('Role variation (fraction of forecast)').fill('0');
   await finder
     .getByRole('button', { name: 'Find trades', exact: true })
