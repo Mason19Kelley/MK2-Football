@@ -78,14 +78,12 @@ test('forecast rejects incomplete and partially completed schedules', () => {
   );
 });
 
-test('unsupported playoff settings preserve records while withholding odds', () => {
-  const result = forecastSeason({ ...fixture(), playoffTeamCount: 3 });
+test('unsupported championship formats preserve records and playoff qualification odds', () => {
+  const result = forecastSeason({ ...fixture(), playoffRoundWeeks: 2 });
   assert.ok(
-    result.teams.every(
-      (t) => t.playoffs === undefined && t.championship === undefined,
-    ),
+    result.teams.every((t) => t.playoffs === 1 && t.championship === undefined),
   );
-  assert.match(result.description, /Playoff odds unavailable/);
+  assert.match(result.description, /Championship odds unavailable/);
 });
 
 test('tied simulations preserve ties rather than count them as wins or losses', () => {

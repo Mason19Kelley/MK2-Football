@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { demoLeague } from '../lib/demo';
 import {
   forecastTradeSeasonOdds,
+  createTradeSeasonForecaster,
   TradeSeasonOddsInput,
 } from '../lib/trade-season-odds';
 import { League } from '../lib/types';
@@ -104,15 +105,42 @@ test('missing schedules, unsupported brackets and missing forecasts do not inven
       }),
     /schedule/,
   );
-  assert.throws(
-    () =>
-      forecastTradeSeasonOdds({
-        ...input,
-        league: { ...input.league, playoffTeamCount: 3 },
-      }),
-    /supported future playoff bracket/,
+  const unsupported = forecastTradeSeasonOdds({
+    ...input,
+    league: { ...input.league, playoffTeamCount: 3 },
+  });
+  assert.ok(
+    unsupported.teams.every(
+      (t) => t.before.playoffs !== undefined && t.before.title === undefined,
+    ),
   );
+  assert.match(unsupported.championshipError, /supported playoff bracket/);
   input.league.teams[1].players[0].ros = null;
   input.league.teams[1].players[0].weekly = null;
   assert.throws(() => forecastTradeSeasonOdds(input), /forecasts/);
+});
+
+test('trade metrics show full expected records and reuse the same season scenarios across results', () => {
+  const input = fixture();
+  input.league.teams[0].wins = 3;
+  input.league.teams[0].losses = 2;
+  const forecast = createTradeSeasonForecaster(input);
+  const result = forecast(input);
+  assert.deepEqual(result.teams[0].beforeRecord, {
+    wins: 5,
+    losses: 2,
+    ties: 0,
+  });
+  assert.deepEqual(result.teams[0].afterRecord, {
+    wins: 3,
+    losses: 4,
+    ties: 0,
+  });
+  assert.deepEqual(forecast(input), result);
+  assert.deepEqual(result, forecastTradeSeasonOdds(input));
+  const unchanged = forecast({ ...input, baseline: input.plan });
+  assert.deepEqual(
+    unchanged.teams[0].beforeRecord,
+    unchanged.teams[0].afterRecord,
+  );
 });

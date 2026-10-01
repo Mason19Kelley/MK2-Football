@@ -1,3 +1,4 @@
+import { playerRosForecast, refreshPlayerRos } from './weekly-forecasts';
 import {
   League,
   Player,
@@ -33,12 +34,15 @@ type RawTeam = {
   nickname?: string;
   abbrev?: string;
   owners?: string[];
+  divisionId?: number;
+  playoffSeed?: number;
   record?: {
     overall?: {
       wins?: number;
       losses?: number;
       ties?: number;
       pointsFor?: number;
+      pointsAgainst?: number;
     };
   };
   roster?: {
@@ -62,8 +66,16 @@ export type ESPNResponse = {
       playoffTeamCount?: number;
       playoffMatchupPeriodLength?: number;
       matchupPeriods?: Record<string, number[]>;
+      playoffSeedingRule?: string;
+      divisions?: { id: number; name?: string }[];
+      playoffReseed?: boolean;
     };
-    scoringSettings?: { scoringItems?: { statId: number; points: number }[] };
+    scoringSettings?: {
+      scoringItems?: { statId: number; points: number }[];
+      matchupTieRule?: string;
+      playoffMatchupTieRule?: string;
+      scoringEnhancementType?: string;
+    };
   };
   members?: {
     id: string;
@@ -75,8 +87,18 @@ export type ESPNResponse = {
   schedule?: {
     id?: number;
     matchupPeriodId?: number;
-    home?: { teamId?: number };
-    away?: { teamId?: number };
+    home?: {
+      teamId?: number;
+      totalPoints?: number;
+      pointsByScoringPeriod?: Record<number, number>;
+    };
+    away?: {
+      teamId?: number;
+      totalPoints?: number;
+      pointsByScoringPeriod?: Record<number, number>;
+    };
+    winner?: string;
+    playoffTierType?: string;
   }[];
 };
 const nfl: Record<number, string> = {
@@ -203,6 +225,8 @@ export async function enrichRosterStats(
       ...player.weeklyActuals,
       ...normalized.weeklyActuals,
     };
+    if (normalized.projectedPointsPerGame !== null)
+      player.projectedPointsPerGame = normalized.projectedPointsPerGame;
     player.percentOwned = normalized.percentOwned;
     player.percentStarted = normalized.percentStarted;
     if (normalized.season !== null) player.season = normalized.season;
@@ -250,35 +274,11 @@ export function normalizePlayer(
         week <= finalWeek,
     )?.appliedTotal,
   );
-  const remainingWeeks = Math.max(0, finalWeek - week + 1);
-  const future = new Map(
-    stats
-      .filter(
-        (s) =>
-          s.statSourceId === 1 &&
-          s.statSplitTypeId === 1 &&
-          (s.scoringPeriodId ?? 0) >= week &&
-          (s.scoringPeriodId ?? 0) <= finalWeek &&
-          finite(s.appliedTotal) !== null,
-      )
-      .map((s) => [s.scoringPeriodId!, s.appliedTotal!]),
-  );
   const avg =
     finite(seasonStat?.appliedAverage) ??
     (seasonPoints === null ? null : seasonPoints / 17);
-  let ros: number | null = null;
-  let projectionSource: Player['projectionSource'] = 'unavailable';
-  if (remainingWeeks === 0) {
-    ros = 0;
-    projectionSource = 'weekly-sum';
-  } else if (future.size === remainingWeeks) {
-    ros = [...future.values()].reduce((s, v) => s + v, 0);
-    projectionSource = 'weekly-sum';
-  } else if (avg !== null) {
-    ros = Math.round(avg * remainingWeeks * 10) / 10;
-    projectionSource = 'estimate';
-  }
-  return {
+  const result: Player = {
+    projectedPointsPerGame: avg,
     id: p.id,
     name: p.fullName ?? `Player ${p.id}`,
     position,
@@ -288,29 +288,25 @@ export function normalizePlayer(
     eligibleSlots: (p.eligibleSlots ?? []).filter((id) => !isIDPSlot(id)),
     status: p.injuryStatus ?? 'UNKNOWN',
     weekly,
-    ros,
-    season:
-      seasonPoints === null
-        ? null
-        : seasonPoints -
-          (finite(
-            stats.find(
-              (s) =>
-                s.statSourceId === 1 &&
-                s.statSplitTypeId === 1 &&
-                s.scoringPeriodId === 18,
-            )?.appliedTotal,
-          ) ??
-            avg ??
-            0),
+    ros: null,
+    season: seasonPoints,
     actual,
-    projectionSource,
+    projectionSource: 'unavailable',
     weeklyProjections: weeklyPoints(stats, 1),
     weeklyActuals: weeklyPoints(stats, 0),
     percentOwned: finite(p.ownership?.percentOwned),
     percentStarted: finite(p.ownership?.percentStarted),
     ...(p.byeWeek !== undefined ? { byeWeek: p.byeWeek } : {}),
   };
+  const consistent = playerRosForecast(result, { week, finalWeek });
+  result.ros = consistent.points;
+  result.projectionSource =
+    consistent.points === null
+      ? 'unavailable'
+      : consistent.estimated
+        ? 'estimate'
+        : 'weekly-sum';
+  return result;
 }
 export function normalizeLeague(raw: ESPNResponse, season: number): League {
   if (!Array.isArray(raw.teams) || !raw.teams.length)
@@ -367,6 +363,9 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
       ...(rosterCapacity !== undefined
         ? { rosterCapacity: Math.max(0, rosterCapacity - hiddenRosterSpots) }
         : {}),
+      divisionId: t.divisionId,
+      playoffSeed: t.playoffSeed,
+      pointsAgainst: record?.pointsAgainst,
       id: t.id,
       name:
         t.name ??
@@ -400,7 +399,7 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
   const warnings: string[] = [];
   if (estimated)
     warnings.push(
-      `${estimated} ROS projections are estimates: ESPN projected season average × remaining league weeks, including the current week. Future byes, injuries, and schedule strength are not adjusted.`,
+      `${estimated} ROS projections are estimates: sum of weekly forecasts, with missing weeks estimated independently from ESPN projected points per game. Known byes contribute zero; estimates have no opponent adjustment.`,
     );
   if (unavailable)
     warnings.push(
@@ -418,7 +417,32 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
     ? Math.max(...regularWeeks)
     : (schedule?.matchupPeriodCount ?? 0) *
       (schedule?.matchupPeriodLength ?? 1);
+  const playoffRounds = Object.entries(schedule?.matchupPeriods ?? {})
+    .filter(([id]) => Number(id) > (schedule?.matchupPeriodCount ?? Infinity))
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, weeks]) => weeks.filter((w) => w <= finalWeek))
+    .filter((weeks) => weeks.length);
   return {
+    ...(schedule
+      ? {
+          playoffRules: {
+            seeding: schedule.playoffSeedingRule ?? 'UNKNOWN',
+            matchupTie: raw.settings?.scoringSettings?.matchupTieRule ?? 'NONE',
+            playoffTie:
+              raw.settings?.scoringSettings?.playoffMatchupTieRule ?? 'UNKNOWN',
+            divisionWinners: (schedule.divisions?.length ?? 0) > 1,
+            reseed: schedule.playoffReseed ?? false,
+            ...(raw.settings?.scoringSettings?.scoringEnhancementType &&
+            raw.settings.scoringSettings.scoringEnhancementType !== 'NONE'
+              ? {
+                  unsupported:
+                    'Additional scoring or median-win rules are unsupported.',
+                }
+              : {}),
+          },
+          ...(playoffRounds.length ? { playoffRounds } : {}),
+        }
+      : {}),
     ...(schedule?.playoffTeamCount !== undefined
       ? { playoffTeamCount: schedule.playoffTeamCount }
       : {}),
@@ -450,6 +474,27 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
                 weeks: weeks.filter((w) => w <= finalWeek),
                 homeId: homeId!,
                 awayId: awayId!,
+                ...(finite(matchup.home?.totalPoints) !== null
+                  ? { homePoints: matchup.home!.totalPoints }
+                  : {}),
+                ...(finite(matchup.away?.totalPoints) !== null
+                  ? { awayPoints: matchup.away!.totalPoints }
+                  : {}),
+                ...(matchup.home?.pointsByScoringPeriod
+                  ? { homeActuals: matchup.home.pointsByScoringPeriod }
+                  : {}),
+                ...(matchup.away?.pointsByScoringPeriod
+                  ? { awayActuals: matchup.away.pointsByScoringPeriod }
+                  : {}),
+                ...(matchup.winner === 'HOME'
+                  ? { winnerId: homeId }
+                  : matchup.winner === 'AWAY'
+                    ? { winnerId: awayId }
+                    : {}),
+                ...(matchup.playoffTierType &&
+                matchup.playoffTierType !== 'NONE'
+                  ? { playoff: true }
+                  : {}),
               },
             ];
           }),
@@ -531,3 +576,75 @@ export async function enrichByeWeeks(league: League): Promise<void> {
     if (bye !== undefined) p.byeWeek = bye;
   }
 }
+
+// Live state comes from the NFL clock, never from a nonzero fantasy score or
+// a guessed three-hour game duration. This also locks bench players at kickoff.
+export async function enrichLiveGames(league: League): Promise<void> {
+  const response = await fetch(
+    `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${league.season}&seasontype=2&week=${league.week}&limit=100`,
+    {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    },
+  );
+  if (!response.ok) throw new Error('Live NFL game state unavailable.');
+  const data = await response.json();
+  if (
+    !Array.isArray(data.events) ||
+    (data.week?.number !== undefined && data.week.number !== league.week) ||
+    (data.season?.year !== undefined && data.season.year !== league.season)
+  )
+    throw new Error('Missing live NFL games for the requested week.');
+  const games = new Map<
+    string,
+    { state: 'scheduled' | 'in-progress' | 'final'; remainingFraction: number }
+  >();
+  for (const event of data.events) {
+    const status = event.status;
+    if (!status?.type || !['pre', 'in', 'post'].includes(status.type.state))
+      continue;
+    const state = status.type.completed
+      ? 'final'
+      : status.type.state === 'in'
+        ? 'in-progress'
+        : 'scheduled';
+    if (status.type.state === 'post' && !status.type.completed) continue;
+    const fraction =
+      state === 'final'
+        ? 0
+        : state === 'scheduled'
+          ? 1
+          : status.period > 4
+            ? 0.15
+            : Math.max(
+                0,
+                Math.min(1, ((4 - status.period) * 900 + status.clock) / 3600),
+              );
+    if (!Number.isFinite(fraction)) continue;
+    for (const competitor of event.competitions?.[0]?.competitors ?? []) {
+      const abbreviation = competitor.team?.abbreviation;
+      if (abbreviation)
+        games.set(abbreviation === 'WSH' ? 'WSH' : abbreviation, {
+          state,
+          remainingFraction: fraction,
+        });
+    }
+  }
+  if (!games.size) throw new Error('Missing live NFL game state.');
+  for (const p of [
+    ...league.teams.flatMap((t) => t.players),
+    ...(league.waiverWire?.players ?? []),
+  ]) {
+    const game = games.get(p.nflTeam);
+    if (game && game.state !== 'scheduled') p.transactionLocked = true;
+    if (game)
+      p.currentGame = {
+        ...game,
+        week: league.week,
+        actual: p.weeklyActuals?.[league.week] ?? null,
+        lockedSlotId: p.slotId,
+      };
+  }
+}
+
+export { refreshPlayerRos };

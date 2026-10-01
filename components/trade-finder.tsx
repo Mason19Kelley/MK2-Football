@@ -19,6 +19,11 @@ import {
 } from '@/lib/trade-evaluation';
 import { PlayoffScenario, TradeObjective } from '@/lib/trade-outcomes';
 import { forecastSnapshot } from '@/lib/forecast-snapshots';
+import { TradeSeasonOddsDisplay } from './trade-season-odds';
+import type {
+  TradeSeasonOdds,
+  TradeSeasonOddsInput,
+} from '@/lib/trade-season-odds';
 
 export function TradeFinder({
   league,
@@ -48,10 +53,10 @@ export function TradeFinder({
   const [partnerMinimum, setPartnerMinimum] = useState('1');
   const [partnerHorizon, setPartnerHorizon] = useState<TradeHorizon | ''>('');
   const [playoffs, setPlayoffs] = useState<PlayoffScenario>({
-    teams: 4,
+    teams: league.playoffTeamCount ?? (league.teams.length >= 10 ? 6 : 4),
     startWeek: league.playoffStartWeek ?? 15,
-    roundWeeks: 1,
-    reseed: false,
+    roundWeeks: league.playoffRoundWeeks ?? 1,
+    reseed: league.playoffRules?.reseed ?? false,
   });
   const [result, setResult] = useState<Awaited<
     ReturnType<typeof findTrades>
@@ -65,6 +70,87 @@ export function TradeFinder({
   const [error, setError] = useState('');
   const [searchLeague, setSearchLeague] = useState<League | null>(null);
   const resultLeague = searchLeague ?? league;
+  const [seasonMetrics, setSeasonMetrics] = useState<{
+    searchResult: NonNullable<typeof result>;
+    inputs: TradeSeasonOddsInput[];
+    entries: { result?: TradeSeasonOdds; error?: string }[];
+  }>();
+  useEffect(() => {
+    if (!result || !searchLeague || !result.candidates.length) return;
+    const inputs = result.candidates.map((t) => ({
+      league: searchLeague,
+      myTeamId,
+      partnerId: t.partnerId,
+      plan: t.plan,
+      baseline: t.baseline,
+      scenarios: t.scenarios,
+      playoffs: t.playoffs,
+      streaming: !t.waiverBaseline,
+    }));
+    setSeasonMetrics({
+      searchResult: result,
+      inputs,
+      entries: inputs.map(() => ({})),
+    });
+    let worker: Worker;
+    const fail = () =>
+      setSeasonMetrics((current) =>
+        current?.searchResult === result
+          ? {
+              ...current,
+              entries: current.entries.map((entry) =>
+                entry.result
+                  ? entry
+                  : {
+                      error:
+                        'Season metrics calculation failed. Run Find trades again to retry.',
+                    },
+              ),
+            }
+          : current,
+      );
+    try {
+      worker = new Worker(
+        new URL('../lib/trade-season-odds-worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+      worker.onmessage = ({
+        data,
+      }: MessageEvent<{
+        index?: number;
+        result?: TradeSeasonOdds;
+        error?: string;
+        done?: boolean;
+      }>) => {
+        if (data.done) {
+          worker.terminate();
+          return;
+        }
+        const index = data.index;
+        if (index === undefined || index < 0 || index >= inputs.length) return;
+        setSeasonMetrics((current) =>
+          current?.searchResult === result
+            ? {
+                ...current,
+                entries: current.entries.map((entry, i) =>
+                  i === index
+                    ? { result: data.result, error: data.error }
+                    : entry,
+                ),
+              }
+            : current,
+        );
+      };
+      worker.onerror = () => {
+        fail();
+        worker.terminate();
+      };
+      worker.postMessage({ inputs });
+    } catch {
+      fail();
+    }
+    return () => worker?.terminate();
+  }, [result, searchLeague, myTeamId]);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => {
     controller.current?.abort();
@@ -100,6 +186,22 @@ export function TradeFinder({
   useEffect(() => {
     setPartnerId('all');
   }, [league.id, league.season, league.source, myTeamId]);
+  useEffect(() => {
+    setPlayoffs({
+      teams: league.playoffTeamCount ?? (league.teams.length >= 10 ? 6 : 4),
+      startWeek: league.playoffStartWeek ?? 15,
+      roundWeeks: league.playoffRoundWeeks ?? 1,
+      reseed: league.playoffRules?.reseed ?? false,
+    });
+  }, [
+    league.id,
+    league.season,
+    league.source,
+    league.playoffTeamCount,
+    league.playoffStartWeek,
+    league.playoffRoundWeeks,
+    league.playoffRules?.reseed,
+  ]);
 
   async function search(e: React.FormEvent) {
     e.preventDefault();
@@ -463,9 +565,11 @@ export function TradeFinder({
             </label>
             <p className="finder-note">
               Use the full remaining season. This declared bracket seeds by
-              wins/ties, then points-for, then team ID, with byes for top seeds.
-              Higher seeds win playoff score ties. Division winners and other
-              tiebreakers are not modeled.
+              winning percentage and the imported league tiebreakers when
+              available, with byes for top seeds. Imported divisions and current
+              playoff results are retained. Imported round weeks apply when
+              these settings match the league; otherwise round lengths describe
+              a scenario. Unsupported rules withhold the affected odds.
             </p>
           </>
         )}
@@ -580,7 +684,7 @@ export function TradeFinder({
         </div>
       )}
       <div className="finder-results">
-        {result?.candidates.map((t) => {
+        {result?.candidates.map((t, index) => {
           const partner = resultLeague.teams.find((p) => p.id === t.partnerId)!;
           return (
             <article
@@ -678,16 +782,6 @@ export function TradeFinder({
                   configured model, not forecast calibration.
                 </p>
               )}
-              {t.mine.outcomes && (
-                <p className="finder-note">
-                  Expected wins: {t.mine.outcomes.before.wins.toFixed(2)} →{' '}
-                  {t.mine.outcomes.after.wins.toFixed(2)}.{' '}
-                  {t.objective === 'title'
-                    ? `Playoff probability: ${(100 * t.mine.outcomes.before.playoffs!).toFixed(1)}% → ${(100 * t.mine.outcomes.after.playoffs!).toFixed(1)}%. Title probability: ${(100 * t.mine.outcomes.before.title!).toFixed(1)}% → ${(100 * t.mine.outcomes.after.title!).toFixed(1)}%.`
-                    : ''}{' '}
-                  Partner objective gain: {t.partner.utilityGain?.toFixed(3)}.
-                </p>
-              )}
               {(t.plan.mine.pickup || t.plan.partner.pickup) && (
                 <p className="finder-note">
                   Gains without the optional pickup: your team{' '}
@@ -696,6 +790,13 @@ export function TradeFinder({
                   {t.tradeOnly.partner >= 0 ? '+' : ''}
                   {points(t.tradeOnly.partner)}. Shown gains include the pickup.
                 </p>
+              )}
+              {seasonMetrics?.searchResult === result && (
+                <TradeSeasonOddsDisplay
+                  input={seasonMetrics.inputs[index]}
+                  result={seasonMetrics.entries[index]?.result}
+                  error={seasonMetrics.entries[index]?.error}
+                />
               )}
               {horizon !== 'ros' ? (
                 <LineupDetails>

@@ -1,5 +1,6 @@
 import { League, Player, fantasyFinalWeek } from './types';
 import { optimalLineup } from './trades';
+import { productionForecast } from './weekly-forecasts';
 
 export type TradeHorizon = 'ros' | 'remaining' | 'next3' | 'playoffs';
 export type WeekLineup = ReturnType<typeof optimalLineup> & {
@@ -49,6 +50,21 @@ export function horizonWeeks(league: League, horizon: TradeHorizon) {
 export function playerWeek(p: Player, league: League, week: number) {
   if (week > fantasyFinalWeek(league))
     return { points: 0, estimated: false, unavailable: true };
+  const game = p.currentGame?.week === week ? p.currentGame : undefined;
+  if (game && game.state !== 'scheduled') {
+    const value = productionForecast(p, league, week);
+    return {
+      points:
+        game.actual === null
+          ? null
+          : game.actual +
+            (game.remainingFraction === 0
+              ? 0
+              : (value.points ?? 0) * game.remainingFraction),
+      estimated: game.state === 'in-progress',
+      unavailable: false,
+    };
+  }
   const unavailable =
     p.byeWeek === week ||
     p.slotId === 21 ||
@@ -57,54 +73,7 @@ export function playerWeek(p: Player, league: League, week: number) {
         p.status,
       ));
   if (unavailable) return { points: 0, estimated: false, unavailable: true };
-  if (Number.isFinite(p.weeklyOverrides?.[week]))
-    return {
-      points: p.weeklyOverrides![week],
-      estimated: false,
-      unavailable: false,
-    };
-  const weeks = Array.from(
-    { length: Math.max(0, fantasyFinalWeek(league) - league.week + 1) },
-    (_, i) => league.week + i,
-  );
-  const forecasts: Record<number, number> = {
-    ...p.weeklyProjections,
-    ...p.weeklyOverrides,
-  };
-  if (forecasts[league.week] === undefined && p.weekly !== null)
-    forecasts[league.week] = p.weekly;
-  const forecast = forecasts[week];
-  if (p.projectionSource === 'custom') {
-    // A ROS override is a total, not a new weekly forecast. Spread it across
-    // non-bye weeks so the override never silently disappears in weekly mode.
-    const playing = weeks.filter((w) => w !== p.byeWeek);
-    return {
-      points: p.ros === null || !playing.length ? null : p.ros / playing.length,
-      estimated: true,
-      unavailable: false,
-    };
-  }
-  if (Number.isFinite(forecast))
-    return {
-      points: forecast,
-      estimated: p.projectionSource === 'sample',
-      unavailable: false,
-    };
-  if (p.ros === null)
-    return { points: null, estimated: false, unavailable: false };
-  const known = weeks.filter(
-    (w) => w !== p.byeWeek && Number.isFinite(forecasts[w]),
-  );
-  const remaining = weeks.length - known.length;
-  // Keep known forecasts. Allocate the residual evenly, including a possible
-  // bye in the denominator, then zero the bye; never inflate estimates to
-  // compensate for missed games. These are estimates, not matchup forecasts.
-  const estimate =
-    remaining > 0
-      ? Math.max(0, p.ros - known.reduce((sum, w) => sum + forecasts[w], 0)) /
-        remaining
-      : 0;
-  return { points: estimate, estimated: true, unavailable: false };
+  return { ...productionForecast(p, league, week), unavailable: false };
 }
 export function evaluateRoster(
   league: League,
@@ -158,14 +127,10 @@ export function evaluateRoster(
             week,
             options.specialistCache,
           );
-    let lineup = optimalLineup(
-      [
-        ...values.map(({ p, value }) => projectedPlayer(p, value)),
-        ...specialists,
-      ],
-      league.slots,
-      'weekly',
-    );
+    let lineup = weeklyLineup(league, week, [
+      ...values.map(({ p, value }) => projectedPlayer(p, value)),
+      ...specialists,
+    ]);
     const rosterIds = new Set(roster.map((p) => p.id));
     let replacements: Player[] = lineup.players.filter(
       (p) => !rosterIds.has(p.id),
@@ -189,7 +154,9 @@ export function evaluateRoster(
         // then maximize real projected points. Free agents only cover vacancies.
         const bonus =
           1 + all.reduce((sum, p) => sum + Math.abs(p.weekly ?? 0), 0);
-        const supplemented = optimalLineup(
+        const supplemented = weeklyLineup(
+          league,
+          week,
           all.map((p) => ({
             ...p,
             weekly:
@@ -197,8 +164,6 @@ export function evaluateRoster(
                 ? null
                 : p.weekly + (rosterIds.has(p.id) ? bonus : 0),
           })),
-          league.slots,
-          'weekly',
         );
         const actual = new Map(all.map((p) => [p.id, p]));
         const players = supplemented.players.map((p) => actual.get(p.id)!);
@@ -322,4 +287,41 @@ export function weeklyReplacementCandidates(
     groups.set(key, group.slice(0, count));
   }
   return [...groups.values()].flat();
+}
+
+// Reserve exact locked slots before optimizing the remaining lineup. Locked
+// bench players cannot enter; negative actual scores cannot be benched away.
+export function weeklyLineup(league: League, week: number, roster: Player[]) {
+  const locked = roster.filter(
+    (p) => p.currentGame?.week === week && p.currentGame.state !== 'scheduled',
+  );
+  if (!locked.length) return optimalLineup(roster, league.slots, 'weekly');
+  const slots = league.slots.map((s) => ({ ...s }));
+  const starters: Player[] = [];
+  for (const p of locked) {
+    const slot = slots.find(
+      (s) => s.id === p.currentGame!.lockedSlotId && s.count > 0,
+    );
+    if (slot) {
+      slot.count--;
+      starters.push(p);
+    }
+  }
+  const ids = new Set(locked.map((p) => p.id));
+  const rest = optimalLineup(
+    roster.filter((p) => !ids.has(p.id)),
+    slots.filter((s) => s.count > 0),
+    'weekly',
+  );
+  const players = [...starters, ...rest.players];
+  const totalSlots = league.slots.reduce((sum, s) => sum + s.count, 0);
+  return {
+    ...rest,
+    players,
+    total: players.reduce((sum, p) => sum + (p.weekly ?? 0), 0),
+    slots: totalSlots,
+    filled: players.length,
+    complete: players.length === totalSlots,
+    missing: rest.missing + starters.filter((p) => p.weekly === null).length,
+  };
 }

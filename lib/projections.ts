@@ -30,6 +30,7 @@ export function restoreSourceProjections(
         next.weekly = baseline.weekly;
         next.ros = baseline.ros;
         next.season = baseline.season;
+        next.projectedPointsPerGame = baseline.projectedPointsPerGame;
         next.weeklyProjections = baseline.weeklyProjections;
         next.projectionSource = baseline.projectionSource;
       } else {
@@ -38,6 +39,7 @@ export function restoreSourceProjections(
         next.weekly = player.weeklyProjections?.[league.week] ?? null;
         if (player.projectionSource === 'custom') {
           next.ros = null;
+          next.projectedPointsPerGame = null;
           next.projectionSource = 'unavailable';
         }
       }

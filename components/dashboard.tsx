@@ -1024,7 +1024,7 @@ export default function Dashboard() {
                   }
                 />
                 <StatCard
-                  label="REST-OF-SEASON POINTS"
+                  label="ROS STARTER POINTS"
                   value={points(rosTotal)}
                   icon={<TrendingUp size={17} />}
                   detail={
@@ -1212,7 +1212,7 @@ export default function Dashboard() {
                               >
                                 {metric === 'weekly'
                                   ? 'WK ' + league.week + ' PROJ.'
-                                  : 'ROS PROJ.'}
+                                  : 'ROS PRODUCTION'}
                                 <ArrowDownUp size={11} />
                               </button>
                             </th>
@@ -1432,8 +1432,8 @@ export default function Dashboard() {
                   <p>
                     Compare optimized starters each week, including known byes,
                     current-week injury availability, and roster moves for
-                    unequal trades. Missing weekly forecasts use labeled ROS
-                    estimates. Nothing is submitted to ESPN.
+                    unequal trades. Missing weekly forecasts use independent
+                    per-game estimates. Nothing is submitted to ESPN.
                   </p>
                 </div>
               </div>
@@ -1941,7 +1941,7 @@ export default function Dashboard() {
           <p>
             {league.source === 'demo'
               ? 'All sample projections are illustrative and do not represent current player forecasts.'
-              : 'Weekly points are ESPN’s current-week projections using league scoring. ROS uses a sum of future weekly forecasts when every remaining week is available; otherwise it estimates projected season average × remaining league weeks. Estimates include the current week and do not adjust future byes or injuries.'}
+              : 'Weekly points are ESPN’s current-week projections using league scoring. Player ROS production sums the same weekly forecasts used by team lineups, including the current week. Missing weeks use independent projected per-game estimates; known byes contribute zero. Team ROS starter points sum optimized weekly lineups with hypothetical K/D/ST streaming. Live matchup forecasts retain locked starters and actual scores; remaining production uses the NFL game clock.'}
           </p>
           {league.warnings.slice(1).map((w) => (
             <p key={w}>{w}</p>

@@ -18,7 +18,7 @@ test('rosters filter, switch projection periods, and browse other teams', async 
   await page
     .getByRole('button', { name: 'Rest of season', exact: true })
     .click();
-  await expect(page.locator('thead')).toContainText('ROS PROJ.');
+  await expect(page.locator('thead')).toContainText('ROS PRODUCTION');
   await page
     .getByRole('button', { name: 'League rosters', exact: true })
     .click();
@@ -298,7 +298,7 @@ test('trade finder searches the league, reviews a result, and clears stale resul
   await expect(finder.getByRole('status')).toContainText('improving trades');
   const first = finder.locator('.finder-card').first();
   await expect(first.locator('.finder-gains')).toContainText('+');
-  const partner = await first.getByRole('heading').innerText();
+  const partner = await first.getByRole('heading', { level: 4 }).innerText();
   await first.getByText('See starting lineup changes').click();
   await expect(
     first.getByRole('region', { name: 'Your team weekly impact' }),
@@ -437,7 +437,15 @@ test('players page lists projections, filters the league pool, and sorts missing
     const league = structuredClone(demo);
     league.teams[0].players[0].ros = null;
     league.teams[0].players[0].projectionSource = 'unavailable';
+    league.teams[0].players[0].weeklyProjections = {};
+    league.teams[0].players[0].projectedPointsPerGame = null;
     league.teams[0].players[1].ros = 0;
+    league.teams[0].players[1].weekly = 0;
+    league.teams[0].players[1].weeklyProjections = Object.fromEntries(
+      Object.keys(league.teams[0].players[1].weeklyProjections ?? {}).map(
+        (w) => [w, 0],
+      ),
+    );
     localStorage.setItem(
       'sunday-league-v1',
       JSON.stringify({ league, original: league, myTeamId: 1 }),

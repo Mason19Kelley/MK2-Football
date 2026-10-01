@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { demoLeague } from '../../lib/demo';
+import { playerRosForecast } from '../../lib/weekly-forecasts';
 
 test('manual and automatic refresh use ESPN projections and preserve selection, then pause for reconnect', async ({
   page,
@@ -65,18 +66,22 @@ test('manual and automatic refresh use ESPN projections and preserve selection, 
     page.getByRole('heading', { name: 'Gridiron Gang', exact: true }),
   ).toBeVisible();
   await expect(page.getByRole('dialog')).not.toBeVisible();
+  const expectedRos = playerRosForecast(
+    demoLeague.teams[0].players.find((p) => p.id === 3918298)!,
+    { ...demoLeague, week: 5 },
+  ).points!;
   const cached = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('sunday-league-v1')!),
   );
   expect(
     cached.league.teams[0].players.find((p: { id: number }) => p.id === 3918298)
       .ros,
-  ).toBe(310);
+  ).toBeCloseTo(expectedRos);
   expect(
     cached.original.teams[0].players.find(
       (p: { id: number }) => p.id === 3918298,
     ).ros,
-  ).toBe(310);
+  ).toBeCloseTo(expectedRos);
   await page.clock.fastForward(300001);
   await expect.poll(() => requests).toBe(2);
   await expect(

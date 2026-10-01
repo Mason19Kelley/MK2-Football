@@ -56,7 +56,12 @@ export function supportsWasmScoring(league: League, options: FindTradeOptions) {
     ![
       ...league.teams.flatMap((t) => t.players),
       ...(league.waiverWire?.players ?? []),
-    ].some((p) => p.projectionBounds)
+    ].some(
+      (p) =>
+        p.projectionBounds ||
+        (p.currentGame?.week === league.week &&
+          p.currentGame.state !== 'scheduled'),
+    )
   );
 }
 

@@ -208,10 +208,10 @@ test('fallback estimates preserve explicit zero forecasts and label missing bye 
     byeWeek: undefined,
   };
   assert.equal(playerWeek(player, l(), 1).points, 0);
-  assert.equal(playerWeek(player, l(), 2).points, 20);
+  assert.equal(playerWeek(player, l(), 2).points, 15);
   assert.equal(playerWeek({ ...player, byeWeek: 2 }, l(), 2).unavailable, true);
   const result = evaluateRoster(l(), [player], 'remaining');
-  assert.equal(result.total, 60);
+  assert.equal(result.total, 45);
   assert.equal(result.weeks[1].estimated, 1);
   assert.equal(result.weeks[1].unknownByes, 1);
   const missing = { ...player, weekly: null, ros: null, weeklyProjections: {} };

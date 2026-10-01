@@ -327,3 +327,13 @@ for (const p of [
     }),
   );
 }
+
+// Keep illustrative player totals on the same weekly dataset as team lineups.
+for (const p of [
+  ...teams.flatMap((t) => t.players),
+  ...demoLeague.waiverWire.players,
+])
+  p.ros = Object.values(p.weeklyProjections ?? {}).reduce(
+    (sum, n) => sum + n,
+    0,
+  );

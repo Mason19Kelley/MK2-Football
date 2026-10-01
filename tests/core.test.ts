@@ -102,7 +102,7 @@ test('normalizes ESPN scoring, owner, record, actual points and labeled ROS esti
   assert.equal(l.teams[0].owner, 'Alex');
   assert.equal(p.weekly, 25);
   assert.equal(p.actual, 70);
-  assert.equal(p.ros, 60);
+  assert.equal(p.ros, 65);
   assert.equal(p.projectionSource, 'estimate');
   assert.equal(l.slots.length, 2);
   assert.equal(l.warnings.length, 1);

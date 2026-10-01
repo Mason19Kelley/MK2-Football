@@ -40,13 +40,35 @@ export function TradeSeasonOddsComparison({
   }, [input]);
   const current = state?.input === input ? state : undefined;
   return (
+    <TradeSeasonOddsDisplay
+      input={input}
+      result={current?.result}
+      error={current?.error}
+    />
+  );
+}
+
+export function TradeSeasonOddsDisplay({
+  input,
+  result,
+  error,
+}: {
+  input: TradeSeasonOddsInput;
+  result?: TradeSeasonOdds;
+  error?: string;
+}) {
+  const signed = (value: number, digits = 2) =>
+    `${value >= 0.5 * 10 ** -digits ? '+' : ''}${(Math.abs(value) < 0.5 * 10 ** -digits ? 0 : value).toFixed(digits)}`;
+  const record = (value: TradeSeasonOdds['teams'][number]['beforeRecord']) =>
+    `${value.wins.toFixed(2)}–${value.losses.toFixed(2)}${value.ties > 0 ? `–${value.ties.toFixed(2)}` : ''}`;
+  return (
     <section className="panel trade-season-odds" aria-label="Trade season odds">
       <span className="eyebrow">PROJECTED SEASON ODDS</span>
-      <h3>Playoff and championship chances</h3>
-      {!current?.result ? (
-        <p role="status">
-          {current?.error
-            ? `Odds unavailable: ${current.error}`
+      <h3>Expected record and season chances</h3>
+      {!result ? (
+        <p aria-live="polite">
+          {error
+            ? `Odds unavailable: ${error}`
             : 'Calculating before-and-after season odds…'}
         </p>
       ) : (
@@ -63,10 +85,44 @@ export function TradeSeasonOddsComparison({
                 </tr>
               </thead>
               <tbody>
-                {current.result.teams.flatMap((team) =>
-                  (['playoffs', 'title'] as const).map((metric) => {
-                    const before = team.before[metric]! * 100;
-                    const after = team.after[metric]! * 100;
+                {result.teams.flatMap((team) =>
+                  (['record', 'playoffs', 'title'] as const).map((metric) => {
+                    if (metric === 'record')
+                      return (
+                        <tr key={`${team.id}-record`}>
+                          <th scope="row">
+                            {
+                              input.league.teams.find((t) => t.id === team.id)
+                                ?.name
+                            }
+                          </th>
+                          <td>
+                            Expected W–L
+                            {team.beforeRecord.ties > 0 ||
+                            team.afterRecord.ties > 0
+                              ? '–T'
+                              : ''}
+                          </td>
+                          <td>{record(team.beforeRecord)}</td>
+                          <td>{record(team.afterRecord)}</td>
+                          <td>
+                            {signed(
+                              team.afterRecord.wins - team.beforeRecord.wins,
+                            )}{' '}
+                            W /{' '}
+                            {signed(
+                              team.afterRecord.losses -
+                                team.beforeRecord.losses,
+                            )}{' '}
+                            L
+                          </td>
+                        </tr>
+                      );
+                    const available =
+                      team.before[metric] !== undefined &&
+                      team.after[metric] !== undefined;
+                    const before = (team.before[metric] ?? 0) * 100;
+                    const after = (team.after[metric] ?? 0) * 100;
                     const change = after - before;
                     const rounded = Number(change.toFixed(1));
                     return (
@@ -82,11 +138,10 @@ export function TradeSeasonOddsComparison({
                             ? 'Make playoffs'
                             : 'Win championship'}
                         </td>
-                        <td>{before.toFixed(1)}%</td>
-                        <td>{after.toFixed(1)}%</td>
+                        <td>{available ? `${before.toFixed(1)}%` : '—'}</td>
+                        <td>{available ? `${after.toFixed(1)}%` : '—'}</td>
                         <td className={rounded > 0 ? 'green-text' : ''}>
-                          {rounded > 0 ? '+' : ''}
-                          {rounded.toFixed(1)} pp
+                          {available ? `${signed(rounded, 1)} pp` : '—'}
                         </td>
                       </tr>
                     );
@@ -96,12 +151,19 @@ export function TradeSeasonOddsComparison({
             </table>
           </div>
           <p className="finder-note">
-            Changes are in percentage points. Odds always cover the full
-            remaining season.
+            Record changes are expected wins and losses; probability changes are
+            percentage points. Metrics always cover the full remaining season.
           </p>
+          {(result.qualificationError || result.championshipError) && (
+            <p className="finder-note">
+              {result.qualificationError
+                ? `Playoff odds unavailable: ${result.qualificationError}`
+                : `Championship odds unavailable: ${result.championshipError}`}
+            </p>
+          )}
           <details className="league-forecast-details">
             <summary>Season odds model</summary>
-            <p>{current.result.description}</p>
+            <p>{result.description}</p>
           </details>
         </>
       )}

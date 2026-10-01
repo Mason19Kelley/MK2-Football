@@ -1,4 +1,5 @@
-export const FANTASY_FINAL_WEEK = 17;
+import { playerRosForecast } from './weekly-forecasts';
+export const FANTASY_FINAL_WEEK = 18;
 export const fantasyFinalWeek = (league: Pick<League, 'finalWeek'>) =>
   Math.min(league.finalWeek, FANTASY_FINAL_WEEK);
 
@@ -18,6 +19,14 @@ export type Player = {
   actual: number | null;
   projectionSource:
     'sample' | 'estimate' | 'weekly-sum' | 'unavailable' | 'custom';
+  projectedPointsPerGame?: number | null;
+  currentGame?: {
+    week: number;
+    state: 'scheduled' | 'in-progress' | 'final';
+    remainingFraction: number;
+    actual: number | null;
+    lockedSlotId: number;
+  };
   weeklyProjections?: Record<number, number>;
   weeklyActuals?: Record<number, number>;
   percentOwned?: number | null;
@@ -55,6 +64,9 @@ export type Team = {
   ties: number;
   pointsFor: number;
   players: Player[];
+  divisionId?: number;
+  playoffSeed?: number;
+  pointsAgainst?: number;
   rosterCapacity?: number;
   acquisitionsRemaining?: number;
 };
@@ -74,7 +86,27 @@ export type League = {
   playoffStartWeek?: number;
   playoffTeamCount?: number;
   playoffRoundWeeks?: number;
-  matchups?: { id: number; weeks: number[]; homeId: number; awayId: number }[];
+  playoffRules?: {
+    seeding: string;
+    matchupTie: string;
+    playoffTie: string;
+    divisionWinners: boolean;
+    reseed: boolean;
+    unsupported?: string;
+  };
+  playoffRounds?: number[][];
+  matchups?: {
+    id: number;
+    weeks: number[];
+    homeId: number;
+    awayId: number;
+    homePoints?: number;
+    awayPoints?: number;
+    homeActuals?: Record<number, number>;
+    awayActuals?: Record<number, number>;
+    winnerId?: number;
+    playoff?: boolean;
+  }[];
   positionLimits?: Partial<Record<Position, number>>;
   tradesLocked?: boolean;
 };
@@ -137,8 +169,8 @@ export function normalizeFantasySeason(league: League): League {
     const oldWeeks = Math.max(0, league.finalWeek - league.week + 1);
     const newWeeks = Math.max(0, finalWeek - league.week + 1);
     const adjust = (value: number | null) => {
-      if (value === null || oldWeeks === newWeeks) return value;
       if (!newWeeks) return 0;
+      if (value === null || oldWeeks === newWeeks) return value;
       const excluded = Array.from(
         { length: league.finalWeek - finalWeek },
         (_, i) => finalWeek + i + 1,
@@ -152,13 +184,20 @@ export function normalizeFantasySeason(league: League): League {
         );
       return (value * newWeeks) / oldWeeks;
     };
+    const perGame =
+      p.projectedPointsPerGame ??
+      (p.ros === null ? null : p.ros / Math.max(1, oldWeeks));
     return {
       ...p,
-      ros: adjust(p.ros),
-      season:
-        league.finalWeek > finalWeek && p.season !== null
-          ? p.season - (p.weeklyProjections?.[18] ?? p.season / 17)
-          : p.season,
+      projectedPointsPerGame: perGame,
+      ros:
+        p.projectionSource === 'custom'
+          ? adjust(p.ros)
+          : playerRosForecast(
+              { ...p, projectedPointsPerGame: perGame },
+              { week: league.week, finalWeek },
+            ).points,
+      season: p.season,
       weekly: league.week > finalWeek ? null : p.weekly,
       weeklyProjections: trim(p.weeklyProjections),
       weeklyActuals: trim(p.weeklyActuals),

@@ -58,7 +58,7 @@ test('available player normalization excludes owned, unknown status, and duplica
   );
   assert.equal(result.length, 1);
   assert.equal(result[0].weekly, 12);
-  assert.equal(result[0].ros, 140);
+  assert.equal(result[0].ros, 142);
   assert.equal(result[0].projectionSource, 'estimate');
   assert.equal(result[0].availability, 'FREEAGENT');
   assert.equal(result[0].percentOwned, 23.5);

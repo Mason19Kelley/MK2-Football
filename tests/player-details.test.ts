@@ -42,7 +42,7 @@ const raw: RawPlayer = {
 };
 test('player details retain full-season projections and actual zeros for rosters and waivers', () => {
   const player = normalizePlayer(raw, 2026, 4, 17);
-  assert.deepEqual(player.weeklyProjections, { 1: 0, 4: 20 });
+  assert.deepEqual(player.weeklyProjections, { 1: 0, 4: 20, 18: 20 });
   assert.deepEqual(player.weeklyActuals, { 1: 0 });
   assert.equal(player.percentOwned, 95.4);
   assert.equal(player.percentStarted, 70.2);
@@ -76,7 +76,7 @@ test('full-season enrichment requests league scoring and preserves existing week
     assert.deepEqual(filter.filterIds.value, [99]);
     assert.deepEqual(
       filter.filterStatsForScoringPeriodIds.value,
-      Array.from({ length: 18 }, (_, week) => week),
+      Array.from({ length: 19 }, (_, week) => week),
     );
     assert.deepEqual(filter.filterStatsForSourceIds.value, [0, 1]);
     return Response.json({ players: [{ player: raw }] });
@@ -89,7 +89,7 @@ test('full-season enrichment requests league scoring and preserves existing week
       { Cookie: 'test-cookie' },
       league,
     );
-    assert.deepEqual(player.weeklyProjections, { 1: 0, 2: 15, 4: 20 });
+    assert.deepEqual(player.weeklyProjections, { 1: 0, 2: 15, 4: 20, 18: 20 });
     assert.deepEqual(player.weeklyActuals, { 1: 0 });
     assert.equal(player.weekly, 20);
   } finally {

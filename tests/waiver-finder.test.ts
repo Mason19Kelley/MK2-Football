@@ -101,7 +101,7 @@ test('finder suppresses recommendations with missing baseline or pickup projecti
   };
   assert.throws(() => findWaiverPickups(league, team.id), /Complete your team/);
 });
-test('week 18 is excluded from imported totals, horizons, and saved snapshots', () => {
+test('week 18 is included when the league uses it from imported totals, horizons, and saved snapshots', () => {
   const stats = [16, 17, 18].map((w) => ({
     seasonId: 2026,
     statSourceId: 1,
@@ -115,29 +115,29 @@ test('week 18 is excluded from imported totals, horizons, and saved snapshots', 
     16,
     18,
   );
-  assert.equal(normalized.ros, 20);
-  assert.deepEqual(normalized.weeklyProjections, { 16: 10, 17: 10 });
+  assert.equal(normalized.ros, 1020);
+  assert.deepEqual(normalized.weeklyProjections, { 16: 10, 17: 10, 18: 1000 });
   assert.equal(
     normalizeLeague(
       { id: 1, teams: [{ id: 1 }], status: { finalScoringPeriod: 18 } },
       2026,
     ).finalWeek,
-    17,
+    18,
   );
   const league = fixture();
   league.finalWeek = 18;
   league.teams[0].players = [player(1, { 16: 10, 17: 10, 18: 1000 })];
   const migrated = normalizeFantasySeason(league);
-  assert.equal(migrated.teams[0].players[0].ros, 20);
+  assert.equal(migrated.teams[0].players[0].ros, 1020);
   assert.deepEqual(normalizeFantasySeason(migrated), migrated);
-  assert.deepEqual(horizonWeeks(league, 'remaining'), [16, 17]);
-  assert.equal(playerWeek(league.teams[0].players[0], league, 18).points, 0);
+  assert.deepEqual(horizonWeeks(league, 'remaining'), [16, 17, 18]);
+  assert.equal(playerWeek(league.teams[0].players[0], league, 18).points, 1000);
   assert.equal(
     normalizePlayer({ id: 1, defaultPositionId: 1, stats }, 2026, 18, 18).ros,
-    0,
+    1000,
   );
   assert.equal(
-    normalizeFantasySeason({ ...league, week: 18 }).teams[0].players[0].ros,
+    normalizeFantasySeason({ ...league, week: 19 }).teams[0].players[0].ros,
     0,
   );
 });

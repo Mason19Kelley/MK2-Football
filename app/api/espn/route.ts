@@ -4,6 +4,8 @@ import {
   parseLeagueId,
   ESPNResponse,
   enrichByeWeeks,
+  enrichLiveGames,
+  refreshPlayerRos,
   enrichRosterStats,
 } from '@/lib/espn';
 import { fetchWaiverWire } from '@/lib/waivers';
@@ -87,7 +89,14 @@ export async function POST(request: NextRequest) {
     const url = new URL(
       `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${id}`,
     );
-    for (const view of ['mTeam', 'mRoster', 'mSettings', 'mMatchup'])
+    for (const view of [
+      'mTeam',
+      'mRoster',
+      'mSettings',
+      'mMatchup',
+      'mMatchupScore',
+      'mLiveScoring',
+    ])
       url.searchParams.append('view', view);
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (s2 && swid) headers.Cookie = `espn_s2=${s2}; SWID=${swid}`;
@@ -141,6 +150,14 @@ export async function POST(request: NextRequest) {
     } catch {
       league.warnings.push(
         'NFL bye weeks could not be loaded. Weekly trade estimates assume unknown byes are playable; sync ESPN to retry.',
+      );
+    }
+    refreshPlayerRos(league);
+    try {
+      await enrichLiveGames(league);
+    } catch {
+      league.warnings.push(
+        'Live NFL game state could not be loaded; current-week forecasts cannot account for locked lineups. Sync ESPN to retry.',
       );
     }
     const response = respond({ league });

@@ -6,6 +6,7 @@ import {
   TradeEvaluation,
   TradeHorizon,
   specialistStreamingCandidates,
+  weeklyLineup,
 } from './weekly-trades';
 import { optimalLineup } from './trades';
 
@@ -118,6 +119,8 @@ export function createScenarioCache(
     league,
     settings,
     forecast(p, week, sample) {
+      if (p.currentGame?.week === week && p.currentGame.state !== 'scheduled')
+        return { ...p, weekly: playerWeek(p, league, week).points };
       // Specialist copies restrict eligibility and can carry a different weekly
       // value; IR and active copies must also remain separate.
       const identity = `${p.id}:${p.slotId === 21}:${p.weekly}:${p.eligibleSlots.join(',')}`;
@@ -227,8 +230,27 @@ function boundedPlayer(
   )
     return p;
   let next = p;
-  if (p.ros === null && p.projectionBounds?.ros)
+  if (p.ros === null && p.projectionBounds?.ros) {
     next = { ...next, ros: p.projectionBounds.ros[side] };
+    if (horizon !== 'ros') {
+      // Bounds describe a total rather than a per-game forecast. Preserve known
+      // weeks and apply the bound to only the unknown active weeks.
+      const weeks = horizonWeeks(league, 'remaining').filter(
+        (w) => w !== p.byeWeek,
+      );
+      const unknown = weeks.filter(
+        (w) => playerWeek(p, league, w).points === null,
+      );
+      const known = weeks.reduce(
+        (sum, w) => sum + (playerWeek(p, league, w).points ?? 0),
+        0,
+      );
+      next.weeklyOverrides = { ...next.weeklyOverrides };
+      for (const week of unknown)
+        next.weeklyOverrides[week] =
+          Math.max(0, p.projectionBounds.ros[side] - known) / unknown.length;
+    }
+  }
   if (horizon !== 'ros') {
     const overrides = { ...next.weeklyOverrides };
     for (const week of horizonWeeks(league, horizon)) {
@@ -350,6 +372,8 @@ export function evaluateForecastRoster(
     const weeklyRoster = [...lower, ...candidates];
     for (let sample = 0; sample < settings.samples; sample++) {
       const forecast = weeklyRoster.map((p) => {
+        if (p.currentGame?.week === week && p.currentGame.state !== 'scheduled')
+          return { ...p, weekly: playerWeek(p, league, week).points };
         if (scenarioCache) return scenarioCache.forecast(p, week, sample);
         // Return weeks are explicit assumptions. IR activation requires a roster plan in reality.
         const recovered = p.returnWeek !== undefined && week >= p.returnWeek;
@@ -382,10 +406,16 @@ export function evaluateForecastRoster(
           weekly: value.points === null ? null : value.points * multiplier,
         };
       });
-      const selected = optimalLineup(forecast, league.slots, 'weekly');
+      const selected = weeklyLineup(league, week, forecast);
       if (sample === 0) missing += selected.missing;
       const score = selected.players.reduce((sum, p) => {
-        const mean = p.weekly!;
+        const game =
+          p.currentGame?.week === week && p.currentGame.state !== 'scheduled'
+            ? p.currentGame
+            : undefined;
+        if (game?.remainingFraction === 0) return sum + (game.actual ?? 0);
+        const banked = game?.actual ?? 0;
+        const mean = p.weekly! - banked;
         const noise = scenarioCache
           ? scenarioCache.noise(p, week, sample)
           : (() => {
@@ -401,8 +431,12 @@ export function evaluateForecastRoster(
             })();
         return (
           sum +
+          banked +
           mean +
-          (p.scoreStdDev ?? Math.abs(mean) * settings.scoreCv) * noise
+          (p.scoreStdDev !== undefined
+            ? p.scoreStdDev * Math.sqrt(game?.remainingFraction ?? 1)
+            : Math.abs(mean) * settings.scoreCv) *
+            noise
         );
       }, 0);
       scenarioWeeks[week].push(score);

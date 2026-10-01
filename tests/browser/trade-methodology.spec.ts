@@ -128,7 +128,12 @@ test('win scenarios, combined search and review carry the same gains into the si
     .click();
   await expect(finder.getByRole('status')).toContainText('(36 checked)');
   const card = finder.locator('.finder-card').first();
-  await expect(card).toContainText('Expected wins: 0.00 → 1.00');
+  await expect(
+    card.locator('.trade-odds-table tbody tr').first(),
+  ).toContainText('0.00–1.00');
+  await expect(
+    card.locator('.trade-odds-table tbody tr').first(),
+  ).toContainText('1.00–0.00');
   const gains = await card.locator('.finder-gains strong').allTextContents();
   await card.getByRole('button', { name: 'Review in trade lab' }).click();
   await expect(
