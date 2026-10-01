@@ -18,7 +18,6 @@ import {
   ScenarioSettings,
 } from '@/lib/trade-evaluation';
 import { PlayoffScenario, TradeObjective } from '@/lib/trade-outcomes';
-import { parseForecastCSV, applyForecasts } from '@/lib/projections';
 import { forecastSnapshot } from '@/lib/forecast-snapshots';
 
 export function TradeFinder({
@@ -26,15 +25,11 @@ export function TradeFinder({
   myTeamId,
   horizon,
   onReview,
-  onUpdateLeague,
-  onRestoreForecasts,
 }: {
   league: League;
   myTeamId: number;
   horizon: TradeHorizon;
   onReview: (trade: TradeCandidate) => void;
-  onUpdateLeague: (league: League) => void;
-  onRestoreForecasts: () => void;
 }) {
   const [partnerId, setPartnerId] = useState('all');
   const [tradeSize, setTradeSize] = useState('1');
@@ -240,7 +235,7 @@ export function TradeFinder({
         )}
       </form>
       <details className="trade-methodology-settings">
-        <summary>Evaluation assumptions and forecast overrides</summary>
+        <summary>Evaluation assumptions</summary>
         <div className="finder-controls">
           <label>
             Objective
@@ -388,10 +383,9 @@ export function TradeFinder({
             <p className="finder-note">
               These are editable assumptions, not historically calibrated
               probabilities. Availability draws are independent by week; role
-              changes persist across the horizon. Player CSV values override the
-              defaults. Lineups use availability and role information before
-              scoring noise is drawn. IR return scenarios require room to
-              activate the player.
+              changes persist across the horizon. Lineups use availability and
+              role information before scoring noise is drawn. IR return
+              scenarios require room to activate the player.
             </p>
           </>
         )}
@@ -471,44 +465,6 @@ export function TradeFinder({
             objectives. Existing snapshots remain usable for points.
           </p>
         )}
-        <label className="pickup-option">
-          Import weekly forecasts, missing-value bounds or player scenarios
-          (CSV)
-          <input
-            type="file"
-            accept=".csv,text/csv"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              try {
-                if (file.size > 1000000)
-                  throw new Error('Choose a CSV under 1 MB.');
-                onUpdateLeague(
-                  applyForecasts(
-                    league,
-                    parseForecastCSV(await file.text(), league),
-                  ),
-                );
-              } catch (err) {
-                setError(
-                  err instanceof Error
-                    ? err.message
-                    : 'Could not import forecasts.',
-                );
-              } finally {
-                e.target.value = '';
-              }
-            }}
-          />
-        </label>
-        <p className="finder-note">
-          Required columns: player_id, week. Optional: weekly_points,
-          lower_points, upper_points, availability_probability, return_week,
-          score_stddev, role_stddev. Week 0 is a ROS total. Bounds apply to
-          missing forecasts in conservative points mode; supply a point forecast
-          for simulation. Scoring deviation is in points; role deviation is a
-          fraction. Values must use league scoring.
-        </p>
         <button
           type="button"
           className="button secondary"
@@ -539,13 +495,6 @@ export function TradeFinder({
           identities or realized player results. They do not reconstruct
           historical offer-time data or create acceptance labels.
         </p>
-        <button
-          type="button"
-          className="button secondary"
-          onClick={onRestoreForecasts}
-        >
-          Restore imported forecasts and remove player scenarios
-        </button>
       </details>
       {!waiverBaseline && tradeSize === 'unequal' && (
         <label className="pickup-option">

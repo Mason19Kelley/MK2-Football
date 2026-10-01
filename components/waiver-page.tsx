@@ -367,9 +367,7 @@ function WaiverRow({
           {p.position} · {p.nflTeam}
           {metric === 'ros' && p.projectionSource === 'estimate'
             ? ' · EST.'
-            : metric === 'ros' && p.projectionSource === 'custom'
-              ? ' · CUSTOM'
-              : ''}
+            : ''}
           {!('availability' in p) ? ` · ${p.slot}` : ''}
           {!['ACTIVE', 'NORMAL'].includes(p.status)
             ? ` · ${p.status.toLowerCase().replaceAll('_', ' ')}`

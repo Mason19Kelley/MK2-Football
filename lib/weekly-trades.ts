@@ -110,7 +110,7 @@ export function evaluateRoster(
   horizon: TradeHorizon,
   projectionCache?: Map<number, Map<number, ReturnType<typeof playerWeek>>>,
   replacementCache?: Map<number, Player[]>,
-  options: { streaming?: boolean } = {},
+  options: { streaming?: boolean; streamSpecialists?: boolean } = {},
 ): TradeEvaluation {
   const base = optimalLineup(roster, league.slots);
   if (horizon === 'ros') return { ...base, weeks: [] };
@@ -143,12 +143,22 @@ export function evaluateRoster(
       }
       return { p, value };
     });
+    const specialists =
+      options.streamSpecialists === false
+        ? []
+        : specialistStreamingCandidates(league, roster, week);
     let lineup = optimalLineup(
-      values.map(({ p, value }) => projectedPlayer(p, value)),
+      [
+        ...values.map(({ p, value }) => projectedPlayer(p, value)),
+        ...specialists,
+      ],
       league.slots,
       'weekly',
     );
-    let replacements: Player[] = [];
+    const rosterIds = new Set(roster.map((p) => p.id));
+    let replacements: Player[] = lineup.players.filter(
+      (p) => !rosterIds.has(p.id),
+    );
     if (!lineup.complete && league.waiverWire && options.streaming !== false) {
       let candidates = replacementCache?.get(week);
       if (!candidates) {
@@ -158,8 +168,12 @@ export function evaluateRoster(
       const rosterIds = new Set(roster.map((p) => p.id));
       const available = candidates.filter((p) => !rosterIds.has(p.id));
       if (available.length) {
-        const owned = values.map(({ p, value }) => projectedPlayer(p, value));
-        const all = [...owned, ...available];
+        const owned = [
+          ...values.map(({ p, value }) => projectedPlayer(p, value)),
+          ...replacements,
+        ];
+        const ownedIds = new Set(owned.map((p) => p.id));
+        const all = [...owned, ...available.filter((p) => !ownedIds.has(p.id))];
         // First maximize coverage, then retain as many owned starters as possible,
         // then maximize real projected points. Free agents only cover vacancies.
         const bonus =
@@ -218,11 +232,41 @@ export function evaluateRoster(
     complete:
       weeks.length > 0 &&
       optimalLineup(
-        roster.map((p) => ({ ...p, ros: p.ros ?? 0 })),
+        [
+          ...new Map(
+            [...roster, ...weeks.flatMap((w) => w.replacements)].map((p) => [
+              p.id,
+              p,
+            ]),
+          ).values(),
+        ].map((p) => ({
+          ...p,
+          ros: p.ros ?? 0,
+        })),
         league.slots,
       ).complete,
     weeks,
   };
+}
+
+// Specialist streaming is a projection assumption, never a roster mutation.
+// Use only available, unrostered free agents with forecasts for this week.
+export function specialistStreamingCandidates(
+  league: League,
+  roster: Player[],
+  week: number,
+): Player[] {
+  const owned = new Set(roster.map((p) => p.id));
+  return weeklyReplacementCandidates(league, week, true)
+    .filter(
+      (p) => (p.position === 'K' || p.position === 'D/ST') && !owned.has(p.id),
+    )
+    .map((p) => ({
+      ...p,
+      eligibleSlots: p.eligibleSlots.filter(
+        (slot) => slot === 16 || slot === 17,
+      ),
+    }));
 }
 
 // Players with the same starting eligibility are interchangeable for a single
@@ -231,6 +275,7 @@ export function evaluateRoster(
 export function weeklyReplacementCandidates(
   league: League,
   week: number,
+  specialistsOnly = false,
 ): Player[] {
   const rostered = new Set(
     league.teams.flatMap((t) => t.players.map((p) => p.id)),
@@ -241,6 +286,7 @@ export function weeklyReplacementCandidates(
   const seen = new Set<number>();
   for (const p of league.waiverWire?.players ?? []) {
     if (
+      (specialistsOnly && p.position !== 'K' && p.position !== 'D/ST') ||
       p.availability !== 'FREEAGENT' ||
       p.slotId === 21 ||
       rostered.has(p.id) ||

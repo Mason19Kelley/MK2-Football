@@ -139,12 +139,6 @@ export default function PlayerModal({
         </div>
         <p className="player-weekly-note">
           {source} weekly projections for the full season. — means unavailable.
-          {player.projectionSource === 'custom'
-            ? ' Custom ROS totals do not change these weekly projections.'
-            : ''}
-          {league.source === 'espn'
-            ? ' Sync ESPN to refresh this snapshot.'
-            : ' Demo values are sample data.'}
         </p>
         <table className="player-weekly-table">
           <thead>

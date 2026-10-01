@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { demoLeague } from '../../lib/demo';
 
-test('manual and automatic refresh preserve custom projections and selection, then pause for reconnect', async ({
+test('manual and automatic refresh use ESPN projections and preserve selection, then pause for reconnect', async ({
   page,
 }) => {
   const now = new Date('2026-09-30T12:00:00Z');
@@ -71,7 +71,7 @@ test('manual and automatic refresh preserve custom projections and selection, th
   expect(
     cached.league.teams[0].players.find((p: { id: number }) => p.id === 3918298)
       .ros,
-  ).toBe(500);
+  ).toBe(310);
   expect(
     cached.original.teams[0].players.find(
       (p: { id: number }) => p.id === 3918298,

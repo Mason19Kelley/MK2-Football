@@ -7,7 +7,6 @@ import {
   RawWaiverEntry,
 } from '../lib/waivers';
 import { demoLeague } from '../lib/demo';
-import { parseProjectionCSV, applyProjections } from '../lib/projections';
 const wire = demoLeague.waiverWire!;
 test('available player normalization excludes owned, unknown status, and duplicate players', () => {
   const entry: RawWaiverEntry = {
@@ -117,18 +116,6 @@ test('missing player values or unfillable starting slots suppress lineup recomme
   );
   assert.equal(missingQB.complete, false);
   assert.equal(missingQB.delta, null);
-});
-test('custom projection uploads support waiver players without changing availability or weekly data', () => {
-  const add = wire.players[0];
-  const updated = applyProjections(
-    demoLeague,
-    parseProjectionCSV(`player_id,ros_points\n${add.id},300`, demoLeague),
-  );
-  assert.equal(updated.waiverWire!.players[0].ros, 300);
-  assert.equal(updated.waiverWire!.players[0].projectionSource, 'custom');
-  assert.equal(updated.waiverWire!.players[0].availability, add.availability);
-  assert.equal(updated.waiverWire!.players[0].weekly, add.weekly);
-  assert.notEqual(wire.players[0].ros, 300);
 });
 test('waiver fetch paginates available active players with league scoring and per-request credentials', async () => {
   const originalFetch = globalThis.fetch;

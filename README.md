@@ -20,7 +20,7 @@ Open http://localhost:3000. The app opens with an explicitly labeled sample leag
 3. For a private league, check **My league is private**. While signed into ESPN, find the `espn_s2` and `SWID` cookie values in your browser's developer tools under **Application → Cookies** (Chrome) or **Storage → Cookies** (Firefox), and paste them into the corresponding fields. MKII Football never asks for your ESPN password.
 4. Select your roster using **View team**, then **Set as my team**. You can also choose your team inside Trade lab.
 
-The server fetches `mTeam`, `mRoster`, `mMatchup`, and `mSettings` from ESPN's read API, then paginates `kona_player_info` for available active players. The connection is saved on the server with AES-256-GCM encryption. The browser receives a random HttpOnly, SameSite cookie, never ESPN credentials. Imported data and your team selection remain in local storage. **Refresh ESPN** uses the saved connection without asking for cookies again. Stale data refreshes every five minutes while the page is visible, including when you reopen or return to the app. Automatic refresh pauses after an expired connection; reconnect once with fresh cookies. Refreshes preserve custom ROS overrides and team selections; a new connection replaces projections. **Disconnect** deletes the saved connection and returns to the sample league. The connection lasts up to 180 days, subject to ESPN session expiry.
+The server fetches `mTeam`, `mRoster`, `mMatchup`, and `mSettings` from ESPN's read API, then paginates `kona_player_info` for available active players. The connection is saved on the server with AES-256-GCM encryption. The browser receives a random HttpOnly, SameSite cookie, never ESPN credentials. Imported data and your team selection remain in local storage. **Refresh ESPN** uses the saved connection without asking for cookies again. Stale data refreshes every five minutes while the page is visible, including when you reopen or return to the app. Automatic refresh pauses after an expired connection; reconnect once with fresh cookies. Refreshes use ESPN projections and preserve team selections. **Disconnect** deletes the saved connection and returns to the sample league. The connection lasts up to 180 days, subject to ESPN session expiry.
 
 Connection files and the encryption key live in `data/espn-connections/` (ignored by Git, restricted filesystem permissions). For deployment, set `ESPN_CONNECTION_DIR` to a private persistent volume shared by all app instances; preserve its `.key` across restarts. Ephemeral serverless filesystems need a persistent storage adapter before deploying this feature. No refresh requests run while the app is closed.
 
@@ -35,12 +35,11 @@ Implementation references: [ESPN read API](https://lm-api-reads.fantasy.espn.com
 - Switch weekly / rest-of-season projections and sort players by name or projected points.
 - View records, starter totals, position contribution charts, and injury flags.
 - Export your current roster to CSV.
-- Upload your own ROS projections and restore original values.
 - Browse free agents and players on waivers, filter by position and availability, and compare a potential add/drop against your roster with weekly or ROS projections.
 - Select players on both sides of a hypothetical trade and compare the best eligible starting lineups. No trades or roster changes are sent to ESPN.
 - Find equal-size or two-for-one trades with drop and optional pickup plans, then review the same moves in the simulator.
 - Compare weekly optimized starters and coverage for the next three weeks, playoffs, or the full remaining season.
-- Use the same functionality on mobile; league snapshots and custom projections persist across reloads.
+- Use the same functionality on mobile; league snapshots persist across reloads.
 
 D/ST and kickers are included in rosters, team projections, and waiver comparisons, but are always excluded from trade-finder offers. Individual defensive players and their starting slots are excluded throughout the app.
 
@@ -52,14 +51,7 @@ ROS points use a sum of ESPN's future weekly forecasts **only when every remaini
 
 Sample rosters, NFL affiliations, records, and projections are illustrative, not current rankings or player forecasts. League ranks compare current starting rosters' ROS totals; incomplete data can reduce a team's total.
 
-To use another source, download a template in **Projection settings** and upload a CSV:
-
-```csv
-player_id,ros_points
-3918298,285.5
-```
-
-Player IDs must belong to a league roster or the imported waiver pool. The template includes both. Projection values must be finite and nonnegative, with no duplicate IDs. Values must reflect your league's scoring and remaining season. Blank values should be filled or their rows removed before uploading. Unlisted players retain their existing projections; custom values are labeled **CUSTOM**. Uploads are validated completely before any values are applied. Files stay in the browser.
+Live leagues always use ESPN projections with league scoring. Projection uploads are not supported. Previously saved uploads are replaced with source projections when the app loads.
 
 ## Trade model
 
@@ -77,19 +69,9 @@ Rank by your gain, the smaller gain, combined gain, the product of both gains, o
 
 ### Forecasts, bounds and outcome scenarios
 
-Known byes and current-week OUT, DOUBTFUL, INACTIVE and suspended players are unavailable. IR stays excluded in deterministic mode. Missing future weekly forecasts use a nonnegative residual ROS allocation after known forecasts. Unknown byes are assumed playable. Custom ROS totals are spread across non-bye weeks. These estimates do not predict matchups, roles or injury recovery.
+Known byes and current-week OUT, DOUBTFUL, INACTIVE and suspended players are unavailable. IR stays excluded in deterministic mode. Missing future weekly forecasts use a nonnegative residual ROS allocation after known forecasts. Unknown byes are assumed playable. These estimates do not predict matchups, roles or injury recovery.
 
-**Evaluation assumptions and forecast overrides** accepts an atomic CSV import with `player_id` and `week` required. Optional columns are:
-
-```csv
-player_id,week,weekly_points,lower_points,upper_points,availability_probability,return_week,score_stddev,role_stddev
-3918298,5,24,,,0.95,,7,0.1
-3918298,6,,18,30,,,,
-```
-
-Week 0 represents a ROS total; other weeks represent points under your league scoring. `score_stddev` is scoring noise in points; `role_stddev` is a fractional forecast deviation. Probabilities must be between 0 and 1. A return week is an explicit manager assumption, not an inferred recovery date. Weekly overrides take priority over source forecasts, but do not rewrite a separate ROS total; use a weekly period or supply a week-0 value. Imported forecasts retain timestamps and provenance, persist with the browser snapshot, and survive same-league/same-season refresh. **Restore imported forecasts and remove player scenarios** clears manager overrides using the original imported snapshot.
-
-Missing projections remain unknown unless explicit lower/upper bounds are supplied. In conservative points mode, recommendations use after lower bounds minus the best no-trade upper bound, so irrelevant bounded bench values can stop blocking stable conclusions. Unbounded potentially relevant missing values still suppress recommendations. Bounds do not silently imply a zero forecast. Outcome simulation requires point forecasts for those players rather than a fabricated distribution inside the bounds.
+Missing projections remain unknown and suppress recommendations when they could affect the result. Refresh ESPN to load available forecasts.
 
 Enable outcome scenarios to model weekly availability, persistent role changes, scoring noise and shared NFL-team scoring correlation. Defaults are editable assumptions, **not historically calibrated forecasts**. Each player/week receives the same seeded draws across all offers. Availability and role information are observed before selecting starters; realized scoring noise is drawn afterwards, preventing hindsight. Results show mean gain, 10th-percentile gain, fraction of scenarios improving, and paired Monte Carlo standard error. Sampling error does not measure forecast accuracy or remove the optimizer's curse. Availability is independent across weeks beyond explicit return assumptions; unsupported injury durations and waiver competition are not modeled.
 
@@ -110,7 +92,7 @@ Available players are fetched on each ESPN sync using the same private-session c
 ## Validation
 
 ```sh
-npm test                       # ESPN normalization, projections, CSV validation, trade optimizer
+npm test                       # ESPN normalization, projections, snapshot migration, trade optimizer
 npm run typecheck
 npx playwright install chromium # once, for browser tests
 npm run test:e2e                # roster browsing, trade flows, ESPN errors, CSV, mobile, credential handling
@@ -135,7 +117,7 @@ The optimizer is also checked against exhaustive assignments on varied small ros
 - `lib/forecast-snapshots.ts` — forecast-input exports for future validation.
 - `lib/weekly-trades.ts` — weekly availability, estimate allocation, and time horizons.
 - `components/trade-finder.tsx` — search controls, trade suggestions, and lineup comparisons.
-- `lib/projections.ts` — atomic projection CSV parsing and overrides.
+- `lib/projections.ts` — migration of old browser snapshots to source projections.
 - `lib/demo.ts` — sample league fixtures.
 - `components/dashboard.tsx` — dashboard, roster browser, trade UI, and connection/settings dialogs.
 - `app/globals.css` — responsive styling and charts.

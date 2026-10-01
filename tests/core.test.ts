@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeLeague, parseLeagueId, ESPNResponse } from '../lib/espn';
 import { optimalLineup, applyTrade } from '../lib/trades';
-import { applyProjections, parseProjectionCSV } from '../lib/projections';
 import { demoLeague } from '../lib/demo';
 import { Player } from '../lib/types';
 const fixture: ESPNResponse = {
@@ -229,28 +228,6 @@ test('trade swaps only selected players and validates ownership', () => {
   );
   assert.throws(() => applyTrade(mine, theirs, [99], [3]));
   assert.throws(() => applyTrade(mine, theirs, [1, 1], [3]));
-});
-test('projection CSV overrides are atomic, preserve weekly values, and reject bad rows', () => {
-  const id = demoLeague.teams[0].players[0].id;
-  const data = parseProjectionCSV(`player_id,ros_points\n${id},0`, demoLeague);
-  const updated = applyProjections(demoLeague, data);
-  assert.equal(updated.teams[0].players[0].ros, 0);
-  assert.equal(updated.teams[0].players[0].projectionSource, 'custom');
-  assert.equal(
-    updated.teams[0].players[0].weekly,
-    demoLeague.teams[0].players[0].weekly,
-  );
-  assert.notEqual(demoLeague.teams[0].players[0].ros, 0);
-  for (const row of [
-    `${id},`,
-    `999999,100`,
-    `${id},-2`,
-    `${id},abc`,
-    `${id},100\n${id},200`,
-  ])
-    assert.throws(() =>
-      parseProjectionCSV(`player_id,ros_points\n${row}`, demoLeague),
-    );
 });
 test('sample league assigns each player to exactly one team and has complete lineups', () => {
   const ids = demoLeague.teams.flatMap((t) => t.players.map((p) => p.id));

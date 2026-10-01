@@ -5,6 +5,7 @@ import {
   playerWeek,
   TradeEvaluation,
   TradeHorizon,
+  specialistStreamingCandidates,
 } from './weekly-trades';
 import { optimalLineup } from './trades';
 
@@ -119,6 +120,7 @@ export function evaluateForecastRoster(
   horizon: TradeHorizon,
   options: {
     streaming?: boolean;
+    streamSpecialists?: boolean;
     scenarios?: ScenarioSettings;
     projectionCache?: Map<number, Map<number, ReturnType<typeof playerWeek>>>;
     replacementCache?: Map<number, Player[]>;
@@ -144,6 +146,7 @@ export function evaluateForecastRoster(
     options.replacementCache,
     {
       streaming: options.streaming ?? false,
+      streamSpecialists: options.streamSpecialists,
     },
   );
   // Identical bounds require one assignment per week, not two.
@@ -156,6 +159,7 @@ export function evaluateForecastRoster(
         options.replacementCache,
         {
           streaming: options.streaming ?? false,
+          streamSpecialists: options.streamSpecialists,
         },
       )
     : base;
@@ -199,8 +203,13 @@ export function evaluateForecastRoster(
   let missing = 0;
   for (const week of weeks) {
     scenarioWeeks[week] = [];
+    const candidates =
+      options.streamSpecialists === false
+        ? []
+        : specialistStreamingCandidates(league, lower, week);
+    const weeklyRoster = [...lower, ...candidates];
     for (let sample = 0; sample < settings.samples; sample++) {
-      const forecast = lower.map((p) => {
+      const forecast = weeklyRoster.map((p) => {
         // Return weeks are explicit assumptions. IR activation requires a roster plan in reality.
         const recovered = p.returnWeek !== undefined && week >= p.returnWeek;
         const value = playerWeek(

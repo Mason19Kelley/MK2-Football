@@ -4,7 +4,6 @@ import { demoLeague } from '../lib/demo';
 import { Player, League } from '../lib/types';
 import { evaluateRoster, horizonWeeks, playerWeek } from '../lib/weekly-trades';
 import { findTrades } from '../lib/trade-finder';
-import { applyProjections } from '../lib/projections';
 import { normalizeLeague, enrichByeWeeks, ESPNResponse } from '../lib/espn';
 import { normalizeWaiverPlayers } from '../lib/waivers';
 import { planTrade, tradePickupCandidates } from '../lib/trade-plans';
@@ -117,24 +116,6 @@ test('fallback estimates preserve explicit zero forecasts and label missing bye 
   assert.equal(result.weeks[1].unknownByes, 1);
   const missing = { ...player, weekly: null, ros: null, weeklyProjections: {} };
   assert.equal(evaluateRoster(l(), [missing], 'remaining').missing, 4);
-});
-test('ROS overrides influence weekly mode and remain estimates with a zero-point bye', () => {
-  const league = {
-    ...l(),
-    teams: [
-      {
-        ...demoLeague.teams[0],
-        id: 1,
-        players: [{ ...p(1, [10, 0, 10, 10]), byeWeek: 2 }],
-      },
-    ],
-  };
-  const updated = applyProjections(league, new Map([[1, 90]]));
-  const result = evaluateRoster(updated, updated.teams[0].players, 'remaining');
-  assert.equal(result.total, 90);
-  assert.equal(result.weeks[1].total, 0);
-  assert.equal(result.weeks[0].estimated, 1);
-  assert.equal(updated.teams[0].players[0].weekly, 10);
 });
 test('horizons respect season end and imported multi-week regular season periods', () => {
   assert.deepEqual(horizonWeeks({ ...l(), week: 4 }, 'next3'), [4]);
@@ -516,4 +497,78 @@ test('missing waiver pools retain zero-point gaps and ROS legacy totals remain u
     },
   };
   assert.equal(evaluateRoster(league, [starter], 'ros').total, 60);
+});
+
+test('weekly projections stream only kickers and defenses and include them in ROS totals', () => {
+  const kicker = {
+    ...p(101, [9, 0, 9, 9], [17]),
+    position: 'K' as const,
+    byeWeek: 2,
+  };
+  const defense = { ...p(102, [6, 6, 6, 6], [16]), position: 'D/ST' as const };
+  const quarterback = p(103, [20, 20, 20, 20]);
+  const freeK = {
+    ...p(104, [8, 10, 8, 8], [17]),
+    position: 'K' as const,
+    availability: 'FREEAGENT' as const,
+    percentOwned: 1,
+  };
+  const freeD = {
+    ...p(105, [8, 7, 9, 5], [16]),
+    position: 'D/ST' as const,
+    availability: 'FREEAGENT' as const,
+    percentOwned: 1,
+  };
+  const league: League = {
+    ...l(),
+    slots: [
+      { id: 0, label: 'QB', count: 1 },
+      { id: 17, label: 'K', count: 1 },
+      { id: 16, label: 'D/ST', count: 1 },
+    ],
+    teams: [
+      { ...demoLeague.teams[0], players: [quarterback, kicker, defense] },
+    ],
+    waiverWire: {
+      syncedAt: '',
+      truncated: false,
+      players: [
+        freeK,
+        freeD,
+        {
+          ...p(106, [100, 100, 100, 100]),
+          availability: 'FREEAGENT',
+          percentOwned: 1,
+        },
+      ],
+    },
+  };
+  const original = JSON.stringify(league);
+  const result = evaluateRoster(
+    league,
+    league.teams[0].players,
+    'remaining',
+    undefined,
+    undefined,
+    { streaming: false },
+  );
+  assert.deepEqual(
+    result.weeks.map((w) => w.total),
+    [37, 37, 38, 35],
+  );
+  assert.equal(result.total, 147);
+  assert.deepEqual(
+    result.weeks[1].replacements.map((p) => p.id).sort(),
+    [104, 105],
+  );
+  assert.ok(result.weeks.every((w) => !w.players.some((p) => p.id === 106)));
+  assert.equal(JSON.stringify(league), original);
+  assert.equal(
+    evaluateRoster(
+      { ...league, waiverWire: undefined },
+      league.teams[0].players,
+      'remaining',
+    ).weeks[1].total,
+    26,
+  );
 });

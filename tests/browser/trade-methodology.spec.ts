@@ -86,9 +86,7 @@ test('default waiver baseline rejects dominated offers and shows the concrete no
   );
   await expect(finder).toContainText('Your no-trade baseline: 40.0');
   await expect(finder).toContainText('Add Method Player 7');
-  await finder
-    .getByText('Evaluation assumptions and forecast overrides')
-    .click();
+  await finder.getByText('Evaluation assumptions').click();
   await finder
     .getByLabel(/Compare against each team's best no-trade/)
     .uncheck();
@@ -119,9 +117,7 @@ test('win scenarios, combined search and review carry the same gains into the si
   });
   await finder.getByLabel('Search teams').selectOption('2');
   await finder.getByLabel('Trade size').selectOption('all');
-  await finder
-    .getByText('Evaluation assumptions and forecast overrides')
-    .click();
+  await finder.getByText('Evaluation assumptions').click();
   await finder.getByLabel('Objective', { exact: true }).selectOption('wins');
   await finder.getByLabel('Scenario samples').fill('8');
   await finder.getByLabel('Weekly availability probability').fill('1');
@@ -151,57 +147,44 @@ test('win scenarios, combined search and review carry the same gains into the si
   expect(errors).toEqual([]);
 });
 
-test('forecast CSV overrides persist and malformed imports leave the snapshot untouched', async ({
+test('saved weekly uploads are replaced by source forecasts and stay removed on reload', async ({
   page,
 }) => {
   const league = fixture();
-  await page.addInitScript((data) => {
-    if (!localStorage.getItem('sunday-league-v1'))
-      localStorage.setItem(
-        'sunday-league-v1',
-        JSON.stringify({ league: data, original: data, myTeamId: 1 }),
-      );
-  }, league);
+  const custom = structuredClone(league);
+  custom.teams[0].players[0].weekly = 0;
+  custom.teams[0].players[0].weeklyOverrides = { 1: 0 };
+  await page.addInitScript(
+    ({ league, custom }) => {
+      if (!localStorage.getItem('sunday-league-v1'))
+        localStorage.setItem(
+          'sunday-league-v1',
+          JSON.stringify({ league: custom, original: league, myTeamId: 1 }),
+        );
+    },
+    { league, custom },
+  );
   await page.goto('/');
+  const savedPlayer = () =>
+    page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem('sunday-league-v1')!).league.teams[0]
+          .players[0],
+    );
+  await expect
+    .poll(async () => (await savedPlayer()).weekly)
+    .toBe(league.teams[0].players[0].weekly);
+  expect((await savedPlayer()).weeklyOverrides).toBeUndefined();
   await page.getByRole('button', { name: /^Trade lab/ }).click();
   const finder = page.getByRole('region', {
     name: 'Trade finder',
     exact: true,
   });
-  await finder
-    .getByText('Evaluation assumptions and forecast overrides')
-    .click();
-  const upload = finder.locator('input[type=file]');
-  await upload.setInputFiles({
-    name: 'bad.csv',
-    mimeType: 'text/csv',
-    buffer: Buffer.from('player_id,week,availability_probability\n1,1,2'),
-  });
-  await expect(finder.getByRole('alert')).toContainText(
-    'Invalid availability probability',
-  );
-  await upload.setInputFiles({
-    name: 'good.csv',
-    mimeType: 'text/csv',
-    buffer: Buffer.from('player_id,week,weekly_points\n1,1,0'),
-  });
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          JSON.parse(localStorage.getItem('sunday-league-v1')!).league.teams[0]
-            .players[0].weeklyOverrides?.[1],
-      ),
-    )
-    .toBe(0);
+  await finder.getByText('Evaluation assumptions', { exact: true }).click();
+  await expect(finder.locator('input[type=file]')).toHaveCount(0);
   await page.reload();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          JSON.parse(localStorage.getItem('sunday-league-v1')!).league.teams[0]
-            .players[0].weeklyOverrides?.[1],
-      ),
-    )
-    .toBe(0);
+    .poll(async () => (await savedPlayer()).weekly)
+    .toBe(league.teams[0].players[0].weekly);
+  expect((await savedPlayer()).weeklyOverrides).toBeUndefined();
 });

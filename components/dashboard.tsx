@@ -20,7 +20,6 @@ import {
   Sparkles,
   TrendingUp,
   Trophy,
-  Upload,
   Users,
   X,
   RefreshCw,
@@ -35,6 +34,7 @@ import {
 import Avatar from './player-avatar';
 import WaiverPage from './waiver-page';
 import PlayersPage from './players-page';
+import MatchupDetails from './matchup-details';
 import { demoLeague, restoreDemoDefenses } from '@/lib/demo';
 import {
   League,
@@ -46,7 +46,12 @@ import {
   total,
   removeIDPPlayers,
 } from '@/lib/types';
-import { TradeHorizon, horizonLabels } from '@/lib/weekly-trades';
+import {
+  TradeHorizon,
+  horizonLabels,
+  evaluateRoster,
+  TradeEvaluation,
+} from '@/lib/weekly-trades';
 import {
   TradeCandidate,
   FindTradeOptions,
@@ -56,12 +61,9 @@ import { runTradeSearch } from '@/lib/trade-search-client';
 import { evaluateForecastRoster } from '@/lib/trade-evaluation';
 import type { SeasonForecast } from '@/lib/season-forecast';
 import { TradeMoves } from './trade-moves';
+import { TradeSeasonOddsComparison } from './trade-season-odds';
 import { TradeWeeklyComparison } from './trade-weekly-comparison';
-import {
-  applyProjections,
-  parseProjectionCSV,
-  preserveForecastOverrides,
-} from '@/lib/projections';
+import { restoreSourceProjections } from '@/lib/projections';
 import { TradeFinder } from './trade-finder';
 
 type View = 'roster' | 'league' | 'players' | 'trade' | 'waivers';
@@ -119,11 +121,13 @@ function Dialog({
   onClose,
   children,
   label,
+  className = '',
 }: {
   open: boolean;
   onClose: () => void;
   children: React.ReactNode;
   label: string;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -141,7 +145,7 @@ function Dialog({
       onClick={(e) => {
         if (e.target === ref.current) onClose();
       }}
-      className="modal"
+      className={`modal ${className}`}
     >
       <div className="modal-inner">
         <button
@@ -159,7 +163,6 @@ function Dialog({
 
 export default function Dashboard() {
   const [league, setLeague] = useState<League>(demoLeague),
-    [original, setOriginal] = useState<League>(demoLeague),
     [myTeamId, setMyTeamId] = useState(1),
     [viewedId, setViewedId] = useState(1),
     [view, setView] = useState<View>('roster'),
@@ -182,8 +185,7 @@ export default function Dashboard() {
     [notice, setNotice] = useState('');
   const [partnerId, setPartnerId] = useState(2),
     [send, setSend] = useState<number[]>([]),
-    [receive, setReceive] = useState<number[]>([]),
-    [projectionError, setProjectionError] = useState('');
+    [receive, setReceive] = useState<number[]>([]);
   const [refreshError, setRefreshError] = useState('');
   const [needsReconnect, setNeedsReconnect] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -241,15 +243,18 @@ export default function Dashboard() {
         const data = JSON.parse(cached);
         if (
           data.league?.teams?.length &&
-          data.original?.teams?.length &&
           data.league.teams.every((t: Team) => Array.isArray(t.players))
         ) {
           if (data.league.source === 'demo' && !data.league.waiverWire) {
             data.league.waiverWire = demoLeague.waiverWire;
-            data.original.waiverWire = demoLeague.waiverWire;
           }
-          setLeague(restoreDemoDefenses(removeIDPPlayers(data.league)));
-          setOriginal(restoreDemoDefenses(removeIDPPlayers(data.original)));
+          setLeague(
+            restoreDemoDefenses(
+              removeIDPPlayers(
+                restoreSourceProjections(data.league, data.original),
+              ),
+            ),
+          );
           const id = data.league.teams.some((t: Team) => t.id === data.myTeamId)
             ? data.myTeamId
             : data.league.teams[0].id;
@@ -268,7 +273,7 @@ export default function Dashboard() {
       try {
         localStorage.setItem(
           STORAGE,
-          JSON.stringify({ league, original, myTeamId }),
+          JSON.stringify({ league, original: league, myTeamId }),
         );
       } catch {
         setNotice(
@@ -276,7 +281,7 @@ export default function Dashboard() {
         );
       }
     }
-  }, [league, original, myTeamId, ready]);
+  }, [league, myTeamId, ready]);
   useEffect(() => {
     if (notice) {
       const timer = setTimeout(() => setNotice(''), 7000);
@@ -289,18 +294,32 @@ export default function Dashboard() {
       league.teams.find((t) => t.id === partnerId) ??
       league.teams.find((t) => t.id !== myTeamId) ??
       mine;
+  const teamProjections = useMemo(
+    () =>
+      new Map(
+        league.teams.map((t) => [
+          t.id,
+          evaluateRoster(league, t.players, 'remaining', undefined, undefined, {
+            streaming: false,
+          }),
+        ]),
+      ),
+    [league],
+  );
   const rankings = useMemo(
     () =>
       [...league.teams].sort(
         (a, b) =>
-          total(b.players.filter(active), 'ros') -
-          total(a.players.filter(active), 'ros'),
+          teamProjections.get(b.id)!.total - teamProjections.get(a.id)!.total,
       ),
-    [league],
+    [league, teamProjections],
   );
   const starters = team.players.filter(active),
-    weeklyTotal = total(starters, 'weekly'),
-    rosTotal = total(starters, 'ros'),
+    weeklyLineup = teamProjections
+      .get(team.id)!
+      .weeks.find((w) => w.week === league.week),
+    weeklyTotal = weeklyLineup?.total ?? 0,
+    rosTotal = teamProjections.get(team.id)!.total,
     rank = rankings.findIndex((t) => t.id === team.id) + 1;
   const displayed = team.players
     .filter(
@@ -321,10 +340,6 @@ export default function Dashboard() {
             (b.slotId === 23 ? 8 : b.slotId),
     );
   const coverage = starters.filter((p) => p[metric] !== null).length;
-  const customCount = [
-    ...league.teams.flatMap((t) => t.players),
-    ...(league.waiverWire?.players ?? []),
-  ].filter((p) => p.projectionSource === 'custom').length;
   function navigate(next: View) {
     setView(next);
     setQuery('');
@@ -356,7 +371,6 @@ export default function Dashboard() {
     setModal(null);
     clearCredentials();
     setError('');
-    setProjectionError('');
   }
   async function connect(e: React.FormEvent) {
     e.preventDefault();
@@ -382,7 +396,6 @@ export default function Dashboard() {
           ? myTeamId
           : next.teams[0].id;
       setLeague(next);
-      setOriginal(next);
       setMyTeamId(id);
       setViewedId(id);
       setPartnerId(next.teams.find((t) => t.id !== id)?.id ?? id);
@@ -437,8 +450,7 @@ export default function Dashboard() {
           throw new Error(data.error || 'Refresh failed. Try again shortly.');
         }
         const next = removeIDPPlayers(data.league);
-        setOriginal(next);
-        setLeague((current) => preserveForecastOverrides(next, current));
+        setLeague(next);
         const fallbackId = next.teams[0].id;
         const keepTeam = (id: number) =>
           next.teams.some((t) => t.id === id) ? id : fallbackId;
@@ -448,8 +460,7 @@ export default function Dashboard() {
         setSend([]);
         setReceive([]);
         setTradePickup(false);
-        if (!automatic)
-          setNotice('League refreshed. Your custom projections are preserved.');
+        if (!automatic) setNotice('League refreshed with ESPN projections.');
       } catch (err) {
         if (generation === connectionGeneration.current)
           setRefreshError(
@@ -515,7 +526,6 @@ export default function Dashboard() {
   function resetDemo() {
     connectionGeneration.current++;
     setLeague(demoLeague);
-    setOriginal(demoLeague);
     changeMine(1);
     setPartnerId(2);
     setView('roster');
@@ -540,20 +550,6 @@ export default function Dashboard() {
           )
           .join('\n'),
     );
-  }
-  async function importProjections(file: File) {
-    setProjectionError('');
-    try {
-      if (file.size > 1000000) throw new Error('Choose a CSV under 1 MB.');
-      const values = parseProjectionCSV(await file.text(), league);
-      setLeague(applyProjections(league, values));
-      setNotice(`Updated ${values.size} rest-of-season projections.`);
-      setModal(null);
-    } catch (err) {
-      setProjectionError(
-        err instanceof Error ? err.message : 'Could not read CSV.',
-      );
-    }
   }
   const playoffValid =
     Number.isInteger(tradeLeague.playoffStartWeek) &&
@@ -678,13 +674,37 @@ export default function Dashboard() {
     after.missing === 0 &&
     partnerBefore.missing === 0 &&
     partnerAfter.missing === 0;
+  const tradeOddsInput = useMemo(
+    () =>
+      canAnalyze && tradePlan
+        ? {
+            league: tradeLeague,
+            myTeamId,
+            partnerId: partner.id,
+            plan: tradePlan,
+            baseline: analysis.baseline,
+            scenarios: reviewPolicy.scenarios,
+            playoffs: reviewPolicy.playoffs,
+            streaming: !tradeWaiverBaseline,
+          }
+        : null,
+    [
+      canAnalyze,
+      tradePlan,
+      tradeLeague,
+      myTeamId,
+      partner.id,
+      analysis.baseline,
+      reviewPolicy.scenarios,
+      reviewPolicy.playoffs,
+      tradeWaiverBaseline,
+    ],
+  );
   const delta = analysis.candidate?.mine.gain ?? after.total - before.total;
   const projectionDescription =
     league.source === 'demo'
       ? 'Illustrative sample projections'
-      : customCount
-        ? `ESPN + ${customCount} custom ROS values`
-        : 'ESPN league scoring';
+      : 'ESPN league scoring';
 
   return (
     <div className="app-shell">
@@ -763,7 +783,6 @@ export default function Dashboard() {
         <button
           className="nav-item muted"
           onClick={() => {
-            setProjectionError('');
             setModal('projections');
           }}
         >
@@ -997,10 +1016,10 @@ export default function Dashboard() {
                   detail={
                     <>
                       <span className="green-text">
-                        {starters.filter((p) => p.weekly !== null).length}/
-                        {starters.length} starters
+                        {weeklyLineup?.filled ?? 0}/{weeklyLineup?.slots ?? 0}{' '}
+                        slots
                       </span>{' '}
-                      with projections
+                      with projections · K/D/ST streaming
                     </>
                   }
                 />
@@ -1010,7 +1029,7 @@ export default function Dashboard() {
                   icon={<TrendingUp size={17} />}
                   detail={
                     <>
-                      Current starters · Weeks{' '}
+                      Best weekly lineups · Weeks{' '}
                       {Math.min(league.week, league.finalWeek)}–
                       {league.finalWeek}
                     </>
@@ -1021,9 +1040,7 @@ export default function Dashboard() {
                   value={`#${rank}`}
                   icon={<Trophy size={17} />}
                   detail={
-                    <>
-                      of {league.teams.length} teams · projected starter totals
-                    </>
+                    <>of {league.teams.length} teams · best weekly lineups</>
                   }
                 />
                 <StatCard
@@ -1033,6 +1050,13 @@ export default function Dashboard() {
                   detail={<>{points(team.pointsFor)} points scored</>}
                 />
               </div>
+              <p className="streaming-projection-note">
+                Projections optimize each week’s lineup and assume K/D/ST
+                streaming from available free agents. Selected replacements are
+                labeled “Waiver wire pickup” in matchup previews.
+                {!league.waiverWire &&
+                  ' Sync ESPN to load free agents; unavailable waiver projections are not added.'}
+              </p>
               <TeamForecast team={team} league={league} forecast={forecast} />
               <div
                 className="team-tabs"
@@ -1221,11 +1245,9 @@ export default function Dashboard() {
                                         <span className="source-label">
                                           {p.projectionSource === 'estimate'
                                             ? 'EST.'
-                                            : p.projectionSource === 'custom'
-                                              ? 'CUSTOM'
-                                              : p.projectionSource === 'sample'
-                                                ? 'SAMPLE'
-                                                : ''}
+                                            : p.projectionSource === 'sample'
+                                              ? 'SAMPLE'
+                                              : ''}
                                         </span>
                                       )}
                                     </small>
@@ -1301,74 +1323,35 @@ export default function Dashboard() {
                           <Layers3 size={17} />
                         </span>
                       </div>
-                      <PositionChart players={starters} metric={metric} />
+                      <PositionChart
+                        players={
+                          metric === 'weekly'
+                            ? (weeklyLineup?.players ?? [])
+                            : teamProjections.get(team.id)!.weeks.flatMap((w) =>
+                                w.players.map((p) => ({
+                                  ...p,
+                                  ros: p.weekly,
+                                })),
+                              )
+                        }
+                        metric={metric}
+                        leagueProjections={teamProjections}
+                      />
                       <div className="chart-legend">
                         <span>
                           <span className="legend-square" />
                           Projected starter points
                         </span>
-                        <strong>{points(total(starters, metric))}</strong>
+                        <strong>
+                          {points(metric === 'weekly' ? weeklyTotal : rosTotal)}
+                        </strong>
                       </div>
-                    </section>
-                    <section className="panel depth-panel">
-                      <div className="panel-heading">
-                        <div>
-                          <h3>Your roster, at a glance</h3>
-                          <p>Every piece of the puzzle.</p>
-                        </div>
-                      </div>
-                      <div className="depth-stats">
-                        <div>
-                          <strong>{starters.length}</strong>
-                          <span>Starters</span>
-                        </div>
-                        <div>
-                          <strong>
-                            {team.players.filter((p) => p.slotId === 20).length}
-                          </strong>
-                          <span>Bench</span>
-                        </div>
-                        <div>
-                          <strong>
-                            {team.players.filter((p) => p.slotId === 21).length}
-                          </strong>
-                          <span>IR</span>
-                        </div>
-                      </div>
-                      <div className="depth-track">
-                        {team.players.map((p) => (
-                          <span
-                            key={p.id}
-                            className={
-                              active(p)
-                                ? 'starter'
-                                : p.slotId === 21
-                                  ? 'ir'
-                                  : 'bench'
-                            }
-                            title={`${p.name} · ${p.slot}`}
-                          />
-                        ))}
-                      </div>
-                      <div className="injury-note">
-                        {team.players.some(
-                          (p) => !['ACTIVE', 'NORMAL'].includes(p.status),
-                        ) ? (
-                          <>
-                            <Activity size={15} />
-                            {
-                              team.players.filter(
-                                (p) => !['ACTIVE', 'NORMAL'].includes(p.status),
-                              ).length
-                            }{' '}
-                            player(s) with a status to watch
-                          </>
-                        ) : (
-                          <>
-                            <CheckCircle2 size={15} />
-                            No injury flags on your roster
-                          </>
-                        )}
+                      <div className="chart-legend chart-average-legend">
+                        <span>
+                          <span className="legend-square league-average-square" />
+                          League average
+                        </span>
+                        <span>All {league.teams.length} teams</span>
                       </div>
                     </section>
                     <section className="trade-promo">
@@ -1402,14 +1385,15 @@ export default function Dashboard() {
                 <div>
                   <h2>Around the league</h2>
                   <p>
-                    Ranked by current starters’ rest-of-season points. Expected
-                    records and odds model the remaining schedule.
+                    Ranked by best weekly lineups’ rest-of-season points.
+                    Expected records and odds model the remaining schedule.
                   </p>
                 </div>
                 <span className="count-chip">{league.teams.length} teams</span>
               </div>
               <LeagueTable
                 forecast={forecast}
+                teamProjections={teamProjections}
                 teams={rankings}
                 myTeamId={myTeamId}
                 league={league}
@@ -1452,42 +1436,6 @@ export default function Dashboard() {
                     estimates. Nothing is submitted to ESPN.
                   </p>
                 </div>
-              </div>
-              <div className="trade-team-controls">
-                <label>
-                  Your team
-                  <select
-                    aria-label="Your team"
-                    value={myTeamId}
-                    onChange={(e) => changeMine(Number(e.target.value))}
-                  >
-                    {league.teams.map((t) => (
-                      <option value={t.id} key={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <ArrowLeftRight size={22} />
-                <label>
-                  Trade partner
-                  <select
-                    aria-label="Trade partner"
-                    value={partner.id}
-                    onChange={(e) => {
-                      setPartnerId(Number(e.target.value));
-                      setReceive([]);
-                    }}
-                  >
-                    {league.teams
-                      .filter((t) => t.id !== myTeamId)
-                      .map((t) => (
-                        <option value={t.id} key={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
               </div>
               <div className="trade-period-controls">
                 <label>
@@ -1536,8 +1484,6 @@ export default function Dashboard() {
                 league={tradeLeague}
                 horizon={tradeHorizon}
                 myTeamId={myTeamId}
-                onUpdateLeague={setLeague}
-                onRestoreForecasts={() => setLeague(original)}
                 onReview={(candidate) => {
                   setReviewPolicy({
                     partnerHorizon: candidate.partnerHorizon,
@@ -1566,6 +1512,42 @@ export default function Dashboard() {
                   );
                 }}
               />
+              <div className="trade-team-controls">
+                <label>
+                  Your team
+                  <select
+                    aria-label="Your team"
+                    value={myTeamId}
+                    onChange={(e) => changeMine(Number(e.target.value))}
+                  >
+                    {league.teams.map((t) => (
+                      <option value={t.id} key={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <ArrowLeftRight size={22} />
+                <label>
+                  Trade partner
+                  <select
+                    aria-label="Trade partner"
+                    value={partner.id}
+                    onChange={(e) => {
+                      setPartnerId(Number(e.target.value));
+                      setReceive([]);
+                    }}
+                  >
+                    {league.teams
+                      .filter((t) => t.id !== myTeamId)
+                      .map((t) => (
+                        <option value={t.id} key={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
               <label className="pickup-option">
                 <input
                   type="checkbox"
@@ -1655,7 +1637,7 @@ export default function Dashboard() {
                         ? `Comparing legal roster plans and no-trade alternatives.${manualProgress?.signature === manualSignature ? ` ${manualProgress.progress.evaluatedRosters.toLocaleString()} roster plans evaluated.` : ''}`
                         : !canAnalyze
                           ? planError ||
-                            'Both teams need projection coverage and enough eligible players for their starting slots. Check the selected period, roster moves, and projection settings.'
+                            'Both teams need projection coverage and enough eligible players for their starting slots. Check the selected period, roster moves, and projection coverage.'
                           : `${horizonLabels[tradeHorizon]} · compared with the same roster policy before and after. ${tradePlan?.mine.pickup || tradePlan?.partner.pickup ? 'Includes the optional free-agent pickup.' : ''}`}
                   </p>
                 </div>
@@ -1691,6 +1673,9 @@ export default function Dashboard() {
                   </strong>
                 </div>
               </div>
+              {tradeOddsInput && (
+                <TradeSeasonOddsComparison input={tradeOddsInput} />
+              )}
               {canAnalyze && analysis.baseline && (
                 <div className="finder-note">
                   <p>No-trade moves used for comparison:</p>
@@ -1782,9 +1767,7 @@ export default function Dashboard() {
               {league.source === 'demo'
                 ? 'Sample data is illustrative, including player teams, records, and projections.'
                 : (league.warnings[0] ??
-                  'ESPN projections use your league’s scoring settings.')}
-              {customCount > 0 &&
-                ` ${customCount} ROS values use your uploaded projections.`}{' '}
+                  'ESPN projections use your league’s scoring settings.')}{' '}
               <button onClick={() => setModal('projections')}>
                 About these projections
                 <ArrowUpRight size={11} />
@@ -1929,7 +1912,7 @@ export default function Dashboard() {
           </button>
           <p className="form-note">
             Your imported roster snapshot is saved in this browser. ESPN’s
-            unofficial API may change. Refreshes preserve custom projections;
+            unofficial API may change. Refreshes use ESPN projections;
             connecting a league replaces them.
           </p>
         </form>
@@ -1963,64 +1946,6 @@ export default function Dashboard() {
             <p key={w}>{w}</p>
           ))}
         </div>
-        <h3 className="upload-heading">Bring your own ROS projections</h3>
-        <p className="small-description">
-          Upload a CSV with <code>player_id</code> and <code>ros_points</code>{' '}
-          columns. Values must match your league scoring and remaining season.
-          Waiver players are included in the template. Unlisted players keep
-          their existing values.
-        </p>
-        <div className="upload-actions">
-          <button
-            className="button secondary"
-            onClick={() =>
-              download(
-                'mkii-football-projections-template.csv',
-                'player_id,ros_points\n' +
-                  [
-                    ...league.teams.flatMap((t) => t.players),
-                    ...(league.waiverWire?.players ?? []),
-                  ]
-                    .map((p) => `${p.id},${p.ros ?? ''}`)
-                    .join('\n'),
-              )
-            }
-          >
-            <Download size={15} />
-            Download template
-          </button>
-          <label className="button primary upload-button">
-            <Upload size={15} />
-            Upload CSV
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void importProjections(file);
-                e.target.value = '';
-              }}
-            />
-          </label>
-        </div>
-        {projectionError && (
-          <div className="form-error" role="alert">
-            {projectionError}
-          </div>
-        )}
-        {customCount > 0 && (
-          <div className="restore-projections">
-            <span>{customCount} custom ROS projections in use.</span>
-            <button
-              onClick={() => {
-                setLeague(original);
-                setNotice('Original projections restored.');
-              }}
-            >
-              Restore original
-            </button>
-          </div>
-        )}
         <p className="form-note">
           Missing values stay visible as —. Totals include available values
           only. Trade recommendations require complete projection coverage for
@@ -2065,8 +1990,8 @@ export default function Dashboard() {
               <h3>Know your projections</h3>
               <p>
                 Switch between this week and the rest of the season. Estimated
-                ROS values are marked EST. You can upload a projection CSV to
-                use your preferred forecasts.
+                ROS values are marked EST. ESPN projections use your league’s
+                scoring settings.
               </p>
             </div>
           </div>
@@ -2095,20 +2020,45 @@ export default function Dashboard() {
 function PositionChart({
   players,
   metric,
+  leagueProjections,
 }: {
   players: Player[];
   metric: 'weekly' | 'ros';
+  leagueProjections: Map<number, TradeEvaluation>;
 }) {
+  const leagueLineups = [...leagueProjections.values()].map((projection) =>
+    metric === 'weekly'
+      ? (projection.weeks[0]?.players ?? [])
+      : projection.weeks.flatMap((w) =>
+          w.players.map((p) => ({ ...p, ros: p.weekly })),
+        ),
+  );
   const data = positions
-    .filter((p) => players.some((x) => x.position === p))
-    .map((p) => ({
-      position: p,
+    .filter(
+      (position) =>
+        players.some((p) => p.position === position) ||
+        leagueLineups.some((lineup) =>
+          lineup.some((p) => p.position === position),
+        ),
+    )
+    .map((position) => ({
+      position,
       value: total(
-        players.filter((x) => x.position === p),
+        players.filter((p) => p.position === position),
         metric,
       ),
+      average:
+        leagueLineups.reduce(
+          (sum, lineup) =>
+            sum +
+            total(
+              lineup.filter((p) => p.position === position),
+              metric,
+            ),
+          0,
+        ) / Math.max(1, leagueLineups.length),
     }));
-  const max = Math.max(...data.map((d) => d.value), 1);
+  const max = Math.max(...data.flatMap((d) => [d.value, d.average]), 1);
   return (
     <div className="position-chart">
       <div className="chart-y-label">
@@ -2120,15 +2070,31 @@ function PositionChart({
           <span>{Math.ceil(max / 2)}</span>
           <span>0</span>
         </div>
-        <div className="chart-bars">
+        <div className="chart-bars chart-comparison-bars">
           {data.map((d) => (
-            <div className="chart-bar-column" key={d.position}>
-              <span className="chart-value">{points(d.value)}</span>
-              <div
-                className={`chart-bar bar-${d.position.replace('/', '')}`}
-                style={{ height: `${Math.max(3, (d.value / max) * 100)}%` }}
-                title={`${d.position}: ${points(d.value)} points`}
-              />
+            <div className="chart-position-group" key={d.position}>
+              {[
+                {
+                  label: 'Projected starter points',
+                  value: d.value,
+                  average: false,
+                },
+                { label: 'League average', value: d.average, average: true },
+              ].map((bar) => (
+                <div className="chart-bar-column" key={bar.label}>
+                  <div
+                    className={`chart-bar ${bar.average ? 'league-average-bar' : `bar-${d.position.replace('/', '')}`}`}
+                    style={{
+                      height: `${Math.max(0, (bar.value / max) * 100)}%`,
+                    }}
+                    role="img"
+                    aria-label={`${d.position} ${bar.label}: ${points(bar.value)} points`}
+                    title={`${d.position} ${bar.label}: ${points(bar.value)} points`}
+                  >
+                    <span className="chart-value">{points(bar.value)}</span>
+                  </div>
+                </div>
+              ))}
               <span className="chart-x-label">{d.position}</span>
             </div>
           ))}
@@ -2323,6 +2289,7 @@ function TeamSchedule({
   league: League;
   forecast: ForecastState;
 }) {
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const matchups =
     forecast?.result?.matchups
       .filter((m) => m.homeId === team.id || m.awayId === team.id)
@@ -2331,6 +2298,8 @@ function TeamSchedule({
     weeks.length === 1
       ? `Week ${weeks[0]}`
       : `Weeks ${[...weeks].sort((a, b) => a - b).join(', ')}`;
+  const selected = matchups.find((m) => m.id === selectedId);
+  useEffect(() => setSelectedId(null), [team.id, league]);
   return (
     <section
       id="team-schedule-panel"
@@ -2378,9 +2347,22 @@ function TeamSchedule({
                 )!;
                 const chance = home ? m.homeWinChance : m.awayWinChance;
                 return (
-                  <tr key={m.id}>
+                  <tr
+                    key={m.id}
+                    className="schedule-matchup-row"
+                    onClick={() => setSelectedId(m.id)}
+                  >
                     <td>
-                      <strong>{label(m.weeks)}</strong>
+                      <button
+                        className="schedule-matchup-button"
+                        aria-label={`View ${label(m.weeks)} matchup against ${opponent.name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedId(m.id);
+                        }}
+                      >
+                        {label(m.weeks)} <ChevronRight size={13} />
+                      </button>
                       {m.weeks.includes(league.week) && (
                         <span className="league-cell-detail">This week</span>
                       )}
@@ -2454,10 +2436,25 @@ function TeamSchedule({
         )}
       <div className="league-table-footer">
         <span>
-          Scores and win chances use the same simulations as the standings.
-          Multi-week scores are combined.
+          Scores use the best projected weekly lineups. Win chances use the same
+          simulations as the standings. Multi-week scores are combined.
         </span>
       </div>
+      <Dialog
+        open={!!selected}
+        onClose={() => setSelectedId(null)}
+        label="Matchup details"
+        className="matchup-modal"
+      >
+        {selected && (
+          <MatchupDetails
+            key={`${team.id}-${selected.id}`}
+            league={league}
+            team={team}
+            matchup={selected}
+          />
+        )}
+      </Dialog>
     </section>
   );
 }
@@ -2477,8 +2474,10 @@ function LeagueTable({
   league,
   onView,
   forecast,
+  teamProjections,
 }: {
   forecast: ForecastState;
+  teamProjections: Map<number, TradeEvaluation>;
   teams: Team[];
   myTeamId: number;
   league: League;
@@ -2495,8 +2494,10 @@ function LeagueTable({
     .map((team, i) => ({
       team,
       rank: i + 1,
-      weekly: total(team.players.filter(active), 'weekly'),
-      ros: total(team.players.filter(active), 'ros'),
+      weekly:
+        teamProjections.get(team.id)?.weeks.find((w) => w.week === league.week)
+          ?.total ?? 0,
+      ros: teamProjections.get(team.id)?.total ?? 0,
       expected: forecasts.get(team.id)?.wins,
       playoffs: forecasts.get(team.id)?.playoffs,
       championship: forecasts.get(team.id)?.championship,

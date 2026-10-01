@@ -4,6 +4,7 @@ import { demoLeague } from '../lib/demo';
 import { forecastSeason } from '../lib/season-forecast';
 import { normalizeLeague } from '../lib/espn';
 import { League } from '../lib/types';
+import { evaluateRoster } from '../lib/weekly-trades';
 
 function fixture(): League {
   return {
@@ -142,4 +143,85 @@ test('matchup scores and win chances reconcile with season records', () => {
       assert.equal(after.ties - before.ties, matchup.tieChance);
     }
   }
+});
+
+test('season simulations include specialist streaming pickups in matchup scores and odds', () => {
+  const league = fixture();
+  league.slots.push(
+    { id: 17, label: 'K', count: 1 },
+    { id: 16, label: 'D/ST', count: 1 },
+  );
+  league.teams.forEach((t) =>
+    t.players.forEach((p) => {
+      p.scoreStdDev = 0;
+      p.roleStdDev = 0;
+    }),
+  );
+  league.waiverWire = {
+    syncedAt: '',
+    truncated: false,
+    players: (['K', 'D/ST'] as const).map((position, i) => ({
+      ...league.teams[0].players[0],
+      id: 900 + i,
+      name: `Streaming ${position}`,
+      position,
+      eligibleSlots: [position === 'K' ? 17 : 16],
+      weekly: 10,
+      ros: 30,
+      scoreStdDev: 0,
+      roleStdDev: 0,
+      availability: 'FREEAGENT' as const,
+      percentOwned: 1,
+    })),
+  };
+  const streamed = forecastSeason(league);
+  const unstreamed = forecastSeason({ ...league, waiverWire: undefined });
+  assert.equal(
+    streamed.matchups[0].homePoints - unstreamed.matchups[0].homePoints,
+    20,
+  );
+  assert.equal(
+    streamed.matchups[0].awayPoints - unstreamed.matchups[0].awayPoints,
+    20,
+  );
+  assert.match(streamed.description, /K\/D\/ST streaming/);
+});
+
+test('displayed matchup projections use optimal weekly totals even when simulated availability differs', () => {
+  const league = fixture();
+  league.teams[0].players[0].availabilityProbability = 0;
+  league.teams[1].players[0].scoreStdDev = 0;
+  league.teams[1].players[0].roleStdDev = 0;
+  const result = forecastSeason(league);
+  const expected = evaluateRoster(
+    league,
+    league.teams[0].players,
+    'remaining',
+    undefined,
+    undefined,
+    { streaming: false },
+  );
+  assert.equal(result.matchups[0].homePoints, expected.weeks[0].total);
+  assert.equal(result.matchups[0].homeWinChance, 0);
+});
+
+test('multi-week matchup projections combine each weeks optimal lineup', () => {
+  const league = fixture();
+  league.playoffStartWeek = 4;
+  league.matchups = league.matchups!.map((m) => ({ ...m, weeks: [2, 3] }));
+  const result = forecastSeason(league);
+  const expected = evaluateRoster(
+    league,
+    league.teams[0].players,
+    'remaining',
+    undefined,
+    undefined,
+    { streaming: false },
+  );
+  assert.equal(
+    result.matchups[0].homePoints,
+    expected.weeks
+      .filter((w) => w.week < 4)
+      .reduce((sum, w) => sum + w.total, 0),
+  );
 });

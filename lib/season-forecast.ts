@@ -1,4 +1,5 @@
 import { League } from './types';
+import { evaluateRoster } from './weekly-trades';
 import {
   defaultScenarioSettings,
   evaluateForecastRoster,
@@ -68,6 +69,14 @@ export function forecastSeason(league: League): SeasonForecast {
       evaluateForecastRoster(league, team.players, 'remaining', { scenarios }),
     ]),
   );
+  const projectedLineups = new Map(
+    league.teams.map((team) => [
+      team.id,
+      evaluateRoster(league, team.players, 'remaining', undefined, undefined, {
+        streaming: false,
+      }),
+    ]),
+  );
   const outcomes = evaluateLeagueOutcomes(
     league,
     evaluations,
@@ -117,8 +126,14 @@ export function forecastSeason(league: League): SeasonForecast {
         );
         return {
           ...m,
-          homePoints: homeScores.reduce((a, b) => a + b, 0) / scenarios.samples,
-          awayPoints: awayScores.reduce((a, b) => a + b, 0) / scenarios.samples,
+          homePoints: projectedLineups
+            .get(m.homeId)!
+            .weeks.filter((w) => m.weeks.includes(w.week))
+            .reduce((sum, w) => sum + w.total, 0),
+          awayPoints: projectedLineups
+            .get(m.awayId)!
+            .weeks.filter((w) => m.weeks.includes(w.week))
+            .reduce((sum, w) => sum + w.total, 0),
           homeWinChance: chance((a, b) => a > b),
           awayWinChance: chance((a, b) => b > a),
           tieChance: chance((a, b) => a === b),
@@ -129,7 +144,7 @@ export function forecastSeason(league: League): SeasonForecast {
     samples: scenarios.samples,
     description: [
       `${scenarios.samples} season simulations · Expected record through Week ${league.playoffStartWeek - 1}.`,
-      'Weekly lineups optimized from current rosters; byes, availability and scoring variance included. Defaults: 95% weekly availability, 35% scoring variation, 10% season-long role variation, and 20% same-NFL-team scoring correlation; player overrides take precedence. No future trades or pickups.',
+      'Weekly lineups optimized from current rosters; byes, availability and scoring variance included. Defaults: 95% weekly availability, 35% scoring variation, 10% season-long role variation, and 20% same-NFL-team scoring correlation; player overrides take precedence. K/D/ST streaming assumes the best projected available free agent can be picked up each week; shared waiver candidates are hypothetical alternatives for each team, not guaranteed acquisitions. No other future pickups or trades.',
       bracketError
         ? `Playoff odds unavailable: ${bracketError}`
         : `${count}-team bracket${league.playoffTeamCount === undefined ? ' (assumed)' : ''}, ${roundWeeks}-week rounds${league.playoffRoundWeeks === undefined ? ' (assumed)' : ''}; top seeds receive byes when needed. Wins, then points scored, determine seeding; fixed bracket, higher seed wins playoff ties.`,

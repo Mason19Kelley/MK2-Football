@@ -115,45 +115,23 @@ test('connect handles errors, imports data, and never persists ESPN credentials'
   await expect(dialog.getByLabel('espn_s2', { exact: true })).toHaveValue('');
   await expect(dialog.getByLabel('SWID', { exact: true })).toHaveValue('');
 });
-test('custom projection upload rejects bad data, applies good data, and restores originals', async ({
+test('projection details use source forecasts without upload controls', async ({
   page,
 }) => {
   await page.goto('/');
   await page
-    .getByRole('button', { name: 'Rest of season', exact: true })
-    .click();
-  await page
     .getByRole('button', { name: 'Projection settings', exact: true })
     .click();
   const dialog = page.getByRole('dialog', { name: 'Projection settings' });
-  await dialog.locator('input[type=file]').setInputFiles({
-    name: 'bad.csv',
-    mimeType: 'text/csv',
-    buffer: Buffer.from('player_id,ros_points\n999999,300'),
-  });
-  await expect(dialog.getByRole('alert')).toContainText(
-    'not on a league roster',
-  );
-  await dialog.locator('input[type=file]').setInputFiles({
-    name: 'good.csv',
-    mimeType: 'text/csv',
-    buffer: Buffer.from('player_id,ros_points\n3918298,500'),
-  });
-  await expect(dialog).not.toBeVisible();
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Sample league');
+  await expect(dialog.locator('input[type=file]')).toHaveCount(0);
   await expect(
-    page.locator('tbody tr').filter({ hasText: 'Josh Allen' }),
-  ).toContainText('500.0');
+    dialog.getByRole('button', { name: 'Download template' }),
+  ).toHaveCount(0);
   await expect(
-    page.locator('tbody tr').filter({ hasText: 'Josh Allen' }),
-  ).toContainText('CUSTOM');
-  await page
-    .getByRole('button', { name: 'Projection settings', exact: true })
-    .click();
-  await dialog.getByRole('button', { name: 'Restore original' }).click();
-  await dialog.getByRole('button', { name: 'Close dialog' }).click();
-  await expect(
-    page.locator('tbody tr').filter({ hasText: 'Josh Allen' }),
-  ).toContainText('310.0');
+    dialog.getByRole('button', { name: 'Restore original' }),
+  ).toHaveCount(0);
 });
 test('mobile navigation and dialogs work without horizontal page overflow', async ({
   page,
@@ -496,14 +474,9 @@ test('players page lists projections, filters the league pool, and sorts missing
     .getByRole('button', { name: 'Projection settings', exact: true })
     .click();
   const dialog = page.getByRole('dialog', { name: 'Projection settings' });
-  await dialog.locator('input[type=file]').setInputFiles({
-    name: 'players.csv',
-    mimeType: 'text/csv',
-    buffer: Buffer.from('player_id,ros_points\n3918298,500'),
-  });
-  await expect(dialog).not.toBeVisible();
-  await expect(rows).toContainText('500.0');
-  await expect(rows).toContainText('Custom');
+  await expect(dialog.locator('input[type=file]')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Close dialog' }).click();
+  await expect(rows).toContainText('Unavailable');
   await page.getByRole('button', { name: 'Clear search', exact: true }).click();
   await page.getByLabel('Player roster filter').selectOption('available');
   await expect(rows).toHaveCount(demoLeague.waiverWire!.players.length);
@@ -585,9 +558,7 @@ test('two-for-one plans and optional pickups survive review and period changes',
     exact: true,
   });
   await finder.getByLabel('Trade size').selectOption('unequal');
-  await finder
-    .getByText('Evaluation assumptions and forecast overrides')
-    .click();
+  await finder.getByText('Evaluation assumptions').click();
   await expect(
     finder.getByLabel(/Compare against each team's best no-trade/),
   ).toBeChecked();

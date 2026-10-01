@@ -272,8 +272,7 @@ export default function PlayersPage({
         />
       )}
       <p className="players-note">
-        ROS means rest of season. Estimates and custom projections are labeled
-        by source.
+        ROS means rest of season. ESPN estimates are labeled by source.
         {!league.waiverWire
           ? ' This snapshot includes rostered players only. Sync ESPN to load available players.'
           : league.waiverWire.truncated

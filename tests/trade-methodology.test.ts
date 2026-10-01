@@ -24,11 +24,6 @@ import {
 } from '../lib/trade-outcomes';
 import { evaluateRoster } from '../lib/weekly-trades';
 import { optimalLineup } from '../lib/trades';
-import {
-  applyForecasts,
-  parseForecastCSV,
-  preserveForecastOverrides,
-} from '../lib/projections';
 import { normalizeLeague } from '../lib/espn';
 
 function player(id: number, values: number[], slot = 0): Player {
@@ -534,47 +529,6 @@ test('outcome objectives reject missing, overlapping or partial matchup coverage
   );
 });
 
-test('forecast imports are atomic, preserve zero overrides, store provenance and reject invalid assumptions', () => {
-  const league = fixture();
-  const csv =
-    'player_id,week,weekly_points,lower_points,upper_points,availability_probability,return_week,score_stddev,role_stddev\n1,1,0,,,0.9,1,5,0.2\n2,1,,1,4,,,,';
-  const rows = parseForecastCSV(csv, league);
-  const updated = applyForecasts(league, rows);
-  assert.equal(
-    evaluateRoster(
-      updated,
-      updated.teams[0].players,
-      'remaining',
-    ).weeks[0].players.find((p) => p.id === 1)?.weekly,
-    undefined,
-  );
-  assert.equal(updated.teams[0].players[0].weeklyOverrides?.[1], 0);
-  assert.equal(updated.teams[0].players[0].availabilityProbability, 0.9);
-  assert.ok(updated.teams[0].players[0].forecastUpdatedAt);
-  assert.equal(league.teams[0].players[0].weeklyOverrides, undefined);
-  assert.throws(
-    () =>
-      parseForecastCSV('player_id,week,weekly_points\n1,1,5\n1,1,10', league),
-    /Duplicate/,
-  );
-  assert.throws(
-    () =>
-      parseForecastCSV(
-        'player_id,week,lower_points,upper_points\n1,1,10,2',
-        league,
-      ),
-    /ordered/,
-  );
-  assert.throws(
-    () =>
-      parseForecastCSV(
-        'player_id,week,availability_probability\n1,1,1.5',
-        league,
-      ),
-    /probability/,
-  );
-});
-
 test('ESPN schedule normalization preserves whole multi-week periods', () => {
   const league = normalizeLeague(
     {
@@ -680,27 +634,6 @@ test('championship utility captures damage from strengthening a direct rival des
     evaluateLeagueOutcomes(league, after, 'remaining', 'title', rules).get(1)
       ?.title,
     0,
-  );
-});
-
-test('forecast and scenario overrides survive same-season refresh but never cross leagues', () => {
-  const old = applyForecasts(
-    fixture(),
-    parseForecastCSV(
-      'player_id,week,weekly_points,availability_probability\n1,1,0,0.9',
-      fixture(),
-    ),
-  );
-  const fresh = fixture();
-  fresh.teams[0].players[0].weekly = 50;
-  const merged = preserveForecastOverrides(fresh, old);
-  assert.equal(merged.teams[0].players[0].weekly, 50);
-  assert.equal(merged.teams[0].players[0].weeklyOverrides?.[1], 0);
-  assert.equal(merged.teams[0].players[0].availabilityProbability, 0.9);
-  assert.equal(
-    preserveForecastOverrides({ ...fresh, season: fresh.season + 1 }, old)
-      .teams[0].players[0].weeklyOverrides,
-    undefined,
   );
 });
 

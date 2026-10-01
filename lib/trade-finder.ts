@@ -671,7 +671,7 @@ export async function findTrades(
   const warnings: string[] = [];
   if (waiverBaseline)
     warnings.push(
-      'Gains compare separate best no-trade counterfactuals with up to one immediate acquisition. Post-trade pickups are jointly allocated. No future streaming is assumed.',
+      'Gains compare separate best no-trade counterfactuals with up to one immediate acquisition. Post-trade pickups are jointly allocated. K/D/ST streaming from available free agents is assumed in weekly projections.',
     );
   warnings.push(
     'Current-week games are assumed unplayed. Capacity and supplied locks, acquisition budgets and position limits are enforced; ESPN does not currently import those transaction restrictions.',
