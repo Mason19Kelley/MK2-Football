@@ -1,6 +1,11 @@
 import { League, Player, Team } from './types';
 import { applyTrade, optimalLineup } from './trades';
-import { horizonWeeks, playerWeek, TradeHorizon } from './weekly-trades';
+import {
+  horizonWeeks,
+  playerWeek,
+  TradeEvaluation,
+  TradeHorizon,
+} from './weekly-trades';
 
 export type RosterEvaluation = ReturnType<typeof optimalLineup> & {
   upperTotal?: number;
@@ -52,13 +57,14 @@ export function compareRosterMoves(
 
 // Enumerate at most one immediate acquisition, plus required capacity drops.
 // Incoming players are protected. Imported locks/limits apply when present.
-export function rosterMoveCandidates(
+// Variants are generated per acquisition so callers can bound or skip pickups.
+function moveSource(
   league: League,
   team: Team,
   roster: Player[],
-  incoming: number[] = [],
-  options: MoveOptions = {},
-): RosterMove[] {
+  incoming: number[],
+  options: MoveOptions,
+) {
   const count = (players: Player[]) =>
     players.filter((p) => p.slotId !== 21).length;
   const capacity = team.rosterCapacity ?? count(team.players);
@@ -80,12 +86,12 @@ export function rosterMoveCandidates(
         players.filter((p) => p.slotId !== 21 && p.position === position)
           .length <= limit!,
     );
-  const variants: RosterMove[] = [];
   const evaluate: (players: Player[]) => RosterEvaluation =
     options.evaluate ??
     ((players: Player[]) => optimalLineup(players, league.slots));
-  function add(pickup?: Player) {
+  function variantsFor(pickup?: Player) {
     options.signal?.throwIfAborted();
+    const variants: RosterMove[] = [];
     const added = pickup ? [...roster, pickup] : roster;
     const positionExcess =
       pickup && legal(roster)
@@ -162,50 +168,74 @@ export function rosterMoveCandidates(
             team.rosterCapacity === undefined ? 'snapshot' : 'league',
         });
     }
+    return variants;
   }
-  add();
-  if (options.includePickup && team.acquisitionsRemaining !== 0) {
+  function pickups() {
+    const result: Player[] = [];
+    if (!options.includePickup || team.acquisitionsRemaining === 0)
+      return result;
+    const freeAgents = new Set(
+      (league.waiverWire?.players ?? [])
+        .filter((q) => q.availability === 'FREEAGENT')
+        .map((q) => q.id),
+    );
+    const owned = new Set(roster.map((q) => q.id));
     const seen = new Set<number>();
     for (const p of available) {
       if (
         seen.has(p.id) ||
         rostered.has(p.id) ||
-        roster.some((q) => q.id === p.id) ||
+        owned.has(p.id) ||
         p.slotId === 21 ||
-        p.transactionLocked
-      )
-        continue;
-      if (
-        !league.waiverWire?.players.some(
-          (q) => q.id === p.id && q.availability === 'FREEAGENT',
-        )
+        p.transactionLocked ||
+        !freeAgents.has(p.id)
       )
         continue;
       seen.add(p.id);
-      add(p);
+      result.push(p);
     }
+    return result;
   }
-  if (!variants.length)
-    throw new Error(
-      'No eligible player can be dropped to make room or meet roster limits.',
-    );
-  if (options.preserveVariants) return variants;
-  // A drop variant with the same acquisition can be discarded after exact evaluation.
-  // Keep the upper-bound optimum separately when bounded forecasts are in use.
-  const groups = new Map<number, RosterMove[]>();
+  return { variantsFor, pickups, evaluate };
+}
+
+// A drop variant with the same acquisition can be discarded after exact evaluation.
+// Keep the upper-bound optimum separately when bounded forecasts are in use.
+// Callers pass the variants of a single acquisition.
+function bestVariants(
+  variants: RosterMove[],
+  evaluate: (players: Player[]) => RosterEvaluation,
+) {
+  let group: RosterMove[] = [];
   for (const move of variants) {
-    const key = move.pickup?.id ?? 0;
-    const previous = groups.get(key) ?? [];
-    const pool = [...previous, move];
+    const pool = [...group, move];
     const lower = [...pool].sort((a, b) =>
       compareRosterMoves(a, b, evaluate),
     )[0];
     const upper = [...pool].sort((a, b) =>
       compareRosterMoves(a, b, evaluate, true),
     )[0];
-    groups.set(key, lower === upper ? [lower] : [lower, upper]);
+    group = lower === upper ? [lower] : [lower, upper];
   }
-  return [...groups.values()].flat();
+  return group;
+}
+
+export function rosterMoveCandidates(
+  league: League,
+  team: Team,
+  roster: Player[],
+  incoming: number[] = [],
+  options: MoveOptions = {},
+): RosterMove[] {
+  const source = moveSource(league, team, roster, incoming, options);
+  const groups = [source.variantsFor()];
+  for (const p of source.pickups()) groups.push(source.variantsFor(p));
+  if (!groups.some((g) => g.length))
+    throw new Error(
+      'No eligible player can be dropped to make room or meet roster limits.',
+    );
+  if (options.preserveVariants) return groups.flat();
+  return groups.flatMap((g) => bestVariants(g, source.evaluate));
 }
 
 export function bestNoTradeMove(
@@ -247,9 +277,16 @@ export function planTrade(
     comparePlans?: (a: TradePlan, b: TradePlan) => number;
     // Use only for independent point gains ranked monotonically after both
     // teams pass their gain thresholds. Scenario/outcome rankings retain all plans.
+    // Acceptance must be monotone in total for complete, fully projected rosters.
     independentPoints?: {
       mine: (value: RosterEvaluation) => boolean;
       partner: (value: RosterEvaluation) => boolean;
+      // Optional upper bounds on the total gained by adding one pickup to an
+      // evaluated roster. Lets the shortlist skip acquisitions that cannot qualify.
+      pickupGain?: {
+        mine: PickupGainBound;
+        partner: PickupGainBound;
+      };
     };
   } = {},
 ): TradePlan {
@@ -271,6 +308,48 @@ export function planTrade(
       players,
       rosterCapacity: undefined,
     };
+  const evaluatePartner = options.evaluatePartner ?? evaluate;
+  if (options.independentPoints && !options.preserveVariants) {
+    const points = options.independentPoints;
+    const mySource = moveSource(
+      league,
+      team(mine),
+      swapped.mine,
+      receive,
+      options,
+    );
+    const myBase = mySource.variantsFor();
+    const theirSource = myBase.length
+      ? moveSource(league, team(partner), swapped.theirs, send, {
+          ...options,
+          evaluate: evaluatePartner,
+        })
+      : undefined;
+    // With a pickup-free variant on each side, neither side can fail for lack
+    // of a legal drop, so lazily shortlisting matches exhaustive enumeration.
+    // Otherwise fall through to the exhaustive path and its error handling.
+    const theirBase = theirSource?.variantsFor();
+    if (theirSource && theirBase?.length) {
+      const myMoves = shortlistMoves(
+        mySource,
+        swapped.mine,
+        myBase,
+        points.mine,
+        points.pickupGain?.mine,
+      );
+      // Skip the partner's acquisitions when this side cannot qualify.
+      if (!myMoves.length) throw new NonImprovingTradeError();
+      const theirMoves = shortlistMoves(
+        theirSource,
+        swapped.theirs,
+        theirBase,
+        points.partner,
+        points.pickupGain?.partner,
+      );
+      if (!theirMoves.length) throw new NonImprovingTradeError();
+      return bestPlan(myMoves, theirMoves, evaluate, evaluatePartner, options);
+    }
+  }
   let myMoves = rosterMoveCandidates(
     league,
     team(mine),
@@ -278,7 +357,6 @@ export function planTrade(
     receive,
     options,
   );
-  const evaluatePartner = options.evaluatePartner ?? evaluate;
   let theirMoves = rosterMoveCandidates(
     league,
     team(partner),
@@ -330,6 +408,122 @@ export function planTrade(
     if (!myMoves.length || !theirMoves.length)
       throw new NonImprovingTradeError();
   }
+  return bestPlan(myMoves, theirMoves, evaluate, evaluatePartner, options);
+}
+
+export type PickupGainBound = (
+  current: RosterEvaluation,
+) => (pickup: Player) => number;
+
+// Per week, one added player can at most replace the weakest starter or fill
+// a vacancy. Valid only for deterministic point lineups without streaming
+// replacements or projection bounds; evaluations must include weekly lineups.
+export function pickupGainBound(
+  league: League,
+  period: TradeHorizon,
+): PickupGainBound {
+  const scores = new Map<number, (number | null)[]>();
+  return (current) => {
+    const value = current as TradeEvaluation;
+    const metric = period === 'ros' ? 'ros' : 'weekly';
+    const floors = (period === 'ros' ? [value] : value.weeks).map((lineup) => {
+      let floor = Infinity;
+      for (const p of lineup.players) floor = Math.min(floor, p[metric] ?? 0);
+      return lineup.filled >= lineup.slots ? floor : Math.min(floor, 0);
+    });
+    return (pickup) => {
+      let known = scores.get(pickup.id);
+      if (!known) {
+        known =
+          period === 'ros'
+            ? [pickup.ros]
+            : horizonWeeks(league, period).map((week) => {
+                const value = playerWeek(pickup, league, week);
+                return value.unavailable ? null : value.points;
+              });
+        scores.set(pickup.id, known);
+      }
+      let gain = 0;
+      for (let w = 0; w < known.length; w++)
+        if (known[w] !== null) gain += Math.max(0, known[w]! - floors[w]);
+      return gain;
+    };
+  };
+}
+
+// Equivalent to evaluating every acquisition, keeping each acquisition's best
+// accepted move, then the best two overall in enumeration order. Acquisitions
+// whose bounded total cannot pass acceptance or beat two kept moves are skipped.
+function shortlistMoves(
+  source: ReturnType<typeof moveSource>,
+  roster: Player[],
+  base: RosterMove[],
+  accepts: (value: RosterEvaluation) => boolean,
+  pickupGain?: PickupGainBound,
+) {
+  const score = source.evaluate;
+  const kept: { index: number; move: RosterMove }[] = [];
+  const consider = (index: number, variants: RosterMove[]) => {
+    let best: RosterMove | undefined;
+    for (const move of bestVariants(variants, score)) {
+      if (!accepts(score(move.roster))) continue;
+      if (!best || compareRosterMoves(move, best, score) < 0) best = move;
+    }
+    if (best) kept.push({ index, move: best });
+  };
+  consider(0, base);
+  const pickups = source.pickups();
+  if (pickups.length) {
+    // Dropping players never raises a total, so the pre-drop roster plus the
+    // pickup's marginal bound caps every variant with that acquisition.
+    const current = pickupGain && score(roster);
+    const gain = current && pickupGain!(current);
+    const order = pickups.map((pickup, i) => ({
+      pickup,
+      index: i + 1,
+      bound: gain ? current.total + gain(pickup) + 1e-6 : Infinity,
+    }));
+    if (gain) order.sort((a, b) => b.bound - a.bound || a.index - b.index);
+    // Kept totals, descending; only the second best matters for pruning.
+    const totals: number[] = kept.map((k) => score(k.move.roster).total);
+    for (const { pickup, index, bound } of order) {
+      if (gain) {
+        const optimistic = {
+          total: bound,
+          complete: true,
+          missing: 0,
+        } as RosterEvaluation;
+        // Orders are by descending bound, so no later acquisition qualifies.
+        if (!accepts(optimistic)) break;
+        if (totals.length >= 2 && bound < totals[1]) break;
+      }
+      const before = kept.length;
+      consider(index, source.variantsFor(pickup));
+      if (kept.length > before) {
+        totals.push(score(kept[kept.length - 1].move.roster).total);
+        totals.sort((a, b) => b - a);
+      }
+    }
+  }
+  return kept
+    .sort(
+      (a, b) => compareRosterMoves(a.move, b.move, score) || a.index - b.index,
+    )
+    .slice(0, 2)
+    .sort((a, b) => a.index - b.index)
+    .map((k) => k.move);
+}
+
+function bestPlan(
+  myMoves: RosterMove[],
+  theirMoves: RosterMove[],
+  evaluate: (players: Player[]) => RosterEvaluation,
+  evaluatePartner: (players: Player[]) => RosterEvaluation,
+  options: MoveOptions & {
+    comparePlans?: (a: TradePlan, b: TradePlan) => number;
+    independentPoints?: unknown;
+  },
+) {
   const compare =
     options.comparePlans ??
     ((a, b) => {

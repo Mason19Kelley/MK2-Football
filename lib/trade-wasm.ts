@@ -102,9 +102,13 @@ export async function createWasmScorer(
     projected: Player[];
   };
   const entries: Entry[] = [];
-  const indices = new Map<string, number>();
-  const identity = (p: Player) =>
-    `${p.id}:${p.slotId === 21 ? 'ir' : 'active'}`;
+  // Active and IR entries for the same player are scored separately.
+  const indices = {
+    active: new Map<number, number>(),
+    ir: new Map<number, number>(),
+  };
+  const indexMap = (p: Player) =>
+    p.slotId === 21 ? indices.ir : indices.active;
   const add = (p: Player) => {
     const values = allWeeks.map((week) => playerWeek(p, league, week));
     const index = entries.length;
@@ -123,7 +127,7 @@ export async function createWasmScorer(
     ...league.teams.flatMap((t) => t.players),
     ...(league.waiverWire?.players ?? []),
   ]) {
-    if (!indices.has(identity(p))) indices.set(identity(p), add(p));
+    if (!indexMap(p).has(p.id)) indexMap(p).set(p.id, add(p));
   }
   const specialistIndices = new Map<number, number>();
   const specialistCache = new Map<number, Player[]>();
@@ -178,28 +182,56 @@ export async function createWasmScorer(
     api.benchmark_free(pointer, capacity * 4);
     api.scorer_clear();
   };
+  const starting = new Set(
+    league.slots.filter((s) => s.count > 0).map((s) => s.id),
+  );
+  // Roster clones (e.g. benched pickups) share their eligibleSlots array.
+  const relevance = new WeakMap<number[], boolean>();
+  const isRelevant = (p: Player) => {
+    let known = relevance.get(p.eligibleSlots);
+    if (known === undefined) {
+      known = p.eligibleSlots.some((id) => starting.has(id));
+      relevance.set(p.eligibleSlots, known);
+    }
+    return known;
+  };
+  const periods = new Map<
+    TradeHorizon,
+    { weeks: number[]; first: number; last: number }
+  >();
+  const period = (horizon: TradeHorizon) => {
+    let known = periods.get(horizon);
+    if (!known) {
+      const weeks = horizonWeeks(league, horizon);
+      const first = weeks.length ? allWeeks.indexOf(weeks[0]) : allWeeks.length;
+      known = { weeks, first, last: first + weeks.length };
+      periods.set(horizon, known);
+    }
+    return known;
+  };
+  let indexView: Uint32Array | undefined;
   const evaluate = (
     roster: Player[],
     horizon: TradeHorizon,
     eager: boolean,
   ): TradeEvaluation | undefined => {
     if (!active || horizon === 'ros') return;
-    const relevant = roster.filter((p) =>
-      league.slots.some((s) => s.count > 0 && p.eligibleSlots.includes(s.id)),
-    );
-    if (relevant.length > capacity) return;
+    const relevant: Player[] = [];
     const offsets: number[] = [];
-    for (const p of relevant) {
-      const index = indices.get(identity(p));
+    for (const p of roster) {
+      if (!isRelevant(p)) continue;
+      const index = indexMap(p).get(p.id);
       if (index === undefined) return;
+      relevant.push(p);
       offsets.push(index);
     }
-    const weeks = horizonWeeks(league, horizon);
-    const first = weeks.length ? allWeeks.indexOf(weeks[0]) : allWeeks.length;
-    const last = first + weeks.length;
+    if (relevant.length > capacity) return;
+    const { weeks, first, last } = period(horizon);
     try {
-      const view = new DataView(api.memory.buffer, pointer, capacity * 4);
-      offsets.forEach((index, i) => view.setUint32(i * 4, index, true));
+      // Memory growth detaches earlier views; rebuild only when that happens.
+      if (indexView?.buffer !== api.memory.buffer)
+        indexView = new Uint32Array(api.memory.buffer, pointer, capacity);
+      indexView.set(offsets);
       if (!api.scorer_evaluate(pointer, offsets.length, first, last))
         throw new Error(error());
       const result = new Float64Array(
@@ -216,14 +248,26 @@ export async function createWasmScorer(
       let cursor = 4 + filled;
       let total = 0,
         missing = 0;
-      const used = new Set<number>();
       for (let w = 0; w < weeks.length; w++) {
         total += snapshot[cursor++];
         const selected = snapshot[cursor++];
         missing += snapshot[cursor++];
-        for (let i = 0; i < selected; i++)
-          used.add(entries[snapshot[cursor++]].player.id);
+        cursor += selected;
       }
+      // Only drop pruning reads used players; collect them on first access.
+      let usedPlayerIds: number[] | undefined;
+      const collectUsed = () => {
+        if (usedPlayerIds) return usedPlayerIds;
+        const used = new Set<number>();
+        let cursor = 4 + filled;
+        for (let w = 0; w < weeks.length; w++) {
+          const selected = snapshot[cursor + 1];
+          cursor += 3;
+          for (let i = 0; i < selected; i++)
+            used.add(entries[snapshot[cursor++]].player.id);
+        }
+        return (usedPlayerIds = [...used]);
+      };
       let details: Pick<TradeEvaluation, 'players' | 'weeks'> | undefined;
       const materialize = () => {
         if (details) return details;
@@ -278,7 +322,9 @@ export async function createWasmScorer(
         },
         upperTotal: total,
         bounded: false,
-        usedPlayerIds: [...used],
+        get usedPlayerIds() {
+          return collectUsed();
+        },
       };
     } catch (failure) {
       dispose();

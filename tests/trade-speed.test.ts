@@ -11,6 +11,7 @@ import {
 import {
   compareRosterMoves,
   NonImprovingTradeError,
+  pickupGainBound,
   planTrade,
   TradePlan,
 } from '../lib/trade-plans';
@@ -208,4 +209,112 @@ test('cached scenarios match uncached draws with shared NFL teams, specialist st
         evaluateForecastRoster(league, roster, horizon, { scenarios }),
       );
     }
+});
+
+test('bounded pickup shortlists match exhaustive shortlists for weekly point plans', () => {
+  let seed = 11;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 2 ** 32;
+  };
+  const weeks = { week: 5, finalWeek: 9 };
+  const forecast = <T extends Player>(p: T, integer: boolean): T => {
+    const weeklyProjections: Record<number, number> = {};
+    for (let w = weeks.week; w <= weeks.finalWeek; w++) {
+      const value = 18 * random() - (p.position === 'D/ST' ? 3 : 0);
+      weeklyProjections[w] = integer ? Math.round(value) : value;
+    }
+    return {
+      ...p,
+      weeklyProjections,
+      ros: Math.round(60 * random()),
+      byeWeek: weeks.week + Math.floor(random() * 5),
+    };
+  };
+  for (let round = 0; round < 4; round++) {
+    const integer = round % 2 === 0;
+    const owned = demoLeague.teams.flatMap((t) => t.players);
+    const league: League = {
+      ...demoLeague,
+      ...weeks,
+      positionLimits: round % 3 ? undefined : { QB: 3, RB: 5, WR: 6, TE: 3 },
+      teams: demoLeague.teams.slice(0, 2).map((team) => ({
+        ...team,
+        rosterCapacity:
+          round === 1 ? team.players.length + 1 : team.rosterCapacity,
+        players: team.players.map((p) => forecast(p, integer)),
+      })),
+      waiverWire: {
+        ...demoLeague.waiverWire!,
+        players: [
+          ...demoLeague.waiverWire!.players,
+          ...Array.from({ length: 20 }, (_, i) => ({
+            ...owned[Math.floor(random() * owned.length)],
+            id: -1000 - i,
+            slotId: 20,
+            slot: 'BN',
+            availability: 'FREEAGENT' as const,
+            percentOwned: 1,
+          })),
+        ].map((p) => forecast(p, integer)),
+      },
+    };
+    const specialistCache = new Map<number, Player[]>();
+    const cache = new Map<string, ReturnType<typeof evaluateForecastRoster>>();
+    const evaluate = (roster: Player[]) => {
+      const key = roster
+        .map((p) => p.id)
+        .sort()
+        .join();
+      let value = cache.get(key);
+      if (!value)
+        cache.set(
+          key,
+          (value = evaluateForecastRoster(league, roster, 'remaining', {
+            specialistCache,
+          })),
+        );
+      return value;
+    };
+    const [mine, partner] = league.teams.map((t) => t.players);
+    const before = evaluate(mine).total,
+      partnerBefore = evaluate(partner).total;
+    const eligible = (players: Player[]) =>
+      players.filter((p) => p.position !== 'K' && p.position !== 'D/ST');
+    const minimum = round % 2 ? 0 : 3;
+    const accepts = (base: number) => (value: { total: number }) =>
+      (value as ReturnType<typeof evaluate>).complete &&
+      (value as ReturnType<typeof evaluate>).missing === 0 &&
+      value.total - base > 0.05 &&
+      value.total - base + 1e-8 >= minimum;
+    const solve = (send: number[], receive: number[], bounded: boolean) => {
+      try {
+        return planTrade(league, mine, partner, send, receive, {
+          includePickup: true,
+          evaluate,
+          pruneUnusedDrops: true,
+          independentPoints: {
+            mine: accepts(before),
+            partner: accepts(partnerBefore),
+            pickupGain: bounded
+              ? {
+                  mine: pickupGainBound(league, 'remaining'),
+                  partner: pickupGainBound(league, 'remaining'),
+                }
+              : undefined,
+          },
+        });
+      } catch (error) {
+        return String(error);
+      }
+    };
+    for (const send of eligible(mine).slice(0, 4))
+      for (const receive of eligible(partner).slice(0, 4)) {
+        assert.deepEqual(
+          solve([send.id], [receive.id], true),
+          solve([send.id], [receive.id], false),
+          `round ${round}: ${send.id} for ${receive.id}`,
+        );
+      }
+  }
 });
