@@ -418,6 +418,8 @@ export type PickupGainBound = (
 // Per week, one added player can at most replace the weakest starter or fill
 // a vacancy. Valid only for deterministic point lineups without streaming
 // replacements or projection bounds; evaluations must include weekly lineups.
+// Valid only without bye fills (`byeFills: false`), where drops never raise a
+// total.
 export function pickupGainBound(
   league: League,
   period: TradeHorizon,

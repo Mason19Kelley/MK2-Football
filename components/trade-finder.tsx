@@ -55,6 +55,7 @@ export function TradeFinder({
   );
   const [objective, setObjective] = useState<TradeObjective>('points');
   const [exhaustiveOutcomes, setExhaustiveOutcomes] = useState(false);
+  const [sortBy, setSortBy] = useState<ResultSort>('search');
   const [partnerMinimum, setPartnerMinimum] = useState('1');
   const [partnerHorizon, setPartnerHorizon] = useState<TradeHorizon | ''>('');
   const [playoffs, setPlayoffs] = useState<PlayoffScenario>({
@@ -258,6 +259,43 @@ export function TradeFinder({
       }
     }
   }
+  // Sorting reorders the shown offers only. Odds come from the season-odds
+  // worker, so offers still calculating are listed after those with odds.
+  const myOdds = (index: number) =>
+    seasonMetrics?.searchResult === result
+      ? seasonMetrics.entries[index]?.result?.teams.find(
+          (team) => team.id === myTeamId,
+        )
+      : undefined;
+  const sortValue = (t: TradeCandidate, index: number) => {
+    if (sortBy === 'points') return t.mine.gain;
+    if (sortBy === 'search') return undefined;
+    const odds = myOdds(index);
+    const before = odds?.before[sortBy],
+      after = odds?.after[sortBy];
+    return before === undefined || after === undefined
+      ? undefined
+      : after - before;
+  };
+  const ordered = (result?.candidates ?? []).map((t, index) => ({
+    t,
+    index,
+    value: sortValue(t, index),
+  }));
+  if (sortBy !== 'search')
+    ordered.sort((a, b) =>
+      a.value === undefined || b.value === undefined
+        ? Number(a.value === undefined) - Number(b.value === undefined) ||
+          a.index - b.index
+        : b.value - a.value || a.index - b.index,
+    );
+  const oddsPending =
+    (sortBy === 'playoffs' || sortBy === 'title') &&
+    ordered.some(
+      ({ index }) =>
+        !seasonMetrics?.entries[index]?.result &&
+        !seasonMetrics?.entries[index]?.error,
+    );
   return (
     <section className="panel trade-finder" aria-label="Trade finder">
       <div className="panel-heading">
@@ -713,8 +751,29 @@ export function TradeFinder({
           ))}
         </div>
       )}
+      {result && result.candidates.length > 1 && (
+        <div className="finder-controls finder-sort">
+          <label>
+            Sort results by
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as ResultSort)}
+            >
+              <option value="search">Search ranking</option>
+              <option value="points">Your points gain</option>
+              <option value="playoffs">Your playoff odds gain</option>
+              <option value="title">Your championship odds gain</option>
+            </select>
+          </label>
+          {oddsPending && (
+            <p className="finder-note">
+              Season odds are still calculating; those trades are listed last.
+            </p>
+          )}
+        </div>
+      )}
       <div className="finder-results">
-        {result?.candidates.map((t, index) => {
+        {ordered.map(({ t, index }) => {
           const partner = resultLeague.teams.find((p) => p.id === t.partnerId)!;
           return (
             <article
@@ -938,3 +997,5 @@ function OutcomeChange({
     </>
   );
 }
+
+type ResultSort = 'search' | 'points' | 'playoffs' | 'title';

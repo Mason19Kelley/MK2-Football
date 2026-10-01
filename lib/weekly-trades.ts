@@ -82,7 +82,10 @@ export function evaluateRoster(
   projectionCache?: Map<number, Map<number, ReturnType<typeof playerWeek>>>,
   replacementCache?: Map<number, Player[]>,
   options: {
+    // Unlimited weekly free-agent fills for any vacancy (legacy baseline).
     streaming?: boolean;
+    // One-week fills for temporary vacancies; on unless set to false.
+    byeFills?: boolean;
     streamSpecialists?: boolean;
     specialistCache?: Map<number, Player[]>;
   } = {},
@@ -104,6 +107,12 @@ export function evaluateRoster(
       eligibleSlots: value.unavailable ? [] : p.eligibleSlots,
     });
   };
+  // K/D/ST slots are streamed separately, so only other slots must be
+  // fillable from the roster for a vacancy to count as temporary.
+  const structural = optimalLineup(
+    roster,
+    league.slots.filter((s) => s.id !== 16 && s.id !== 17),
+  ).complete;
   const weeks = horizonWeeks(league, horizon).map((week) => {
     const values = roster.map((p) => {
       let byWeek = projectionCache?.get(p.id);
@@ -135,7 +144,16 @@ export function evaluateRoster(
     let replacements: Player[] = lineup.players.filter(
       (p) => !rosterIds.has(p.id),
     );
-    if (!lineup.complete && league.waiverWire && options.streaming !== false) {
+    // Bye fills: a slot the roster normally fills but cannot this week (byes,
+    // IR, known OUT) takes the best free agent for this week only. A bench
+    // player is dropped for the week and re-added afterwards, so the fill
+    // costs nothing. Rosters missing a position entirely get no fill.
+    const byeFill = options.byeFills !== false && structural;
+    if (
+      !lineup.complete &&
+      league.waiverWire &&
+      (options.streaming !== false || byeFill)
+    ) {
       let candidates = replacementCache?.get(week);
       if (!candidates) {
         candidates = weeklyReplacementCandidates(league, week);

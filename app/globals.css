@@ -2802,6 +2802,9 @@ h1 {
   font-size: 11px;
   color: #935a34;
 }
+.finder-sort label {
+  flex: 0 1 260px;
+}
 .finder-controls select,
 .finder-controls input {
   width: 100%;

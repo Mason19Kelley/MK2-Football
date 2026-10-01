@@ -51,7 +51,8 @@ test('trade simulator updates projected lineup value and resets', async ({
   await expect(
     page.getByRole('heading', { name: 'Your starting lineup gets stronger.' }),
   ).toBeVisible();
-  await expect(page.locator('.trade-impact').first()).toContainText('+17.2');
+  // Bye weeks in this window are covered by one-week free-agent fills.
+  await expect(page.locator('.trade-impact').first()).toContainText('+16.0');
   await expect(
     page.getByRole('region', { name: 'Your team weekly impact' }),
   ).toContainText('Next 3 weeks');
@@ -258,6 +259,8 @@ test('trade finder searches the league, reviews a result, and clears stale resul
     });
     const league = {
       ...demo,
+      // No free agents: this checks the finder flow, not no-trade baselines.
+      waiverWire: { ...demo.waiverWire!, players: [] },
       slots: [
         { id: 2, label: 'RB', count: 1 },
         { id: 4, label: 'WR', count: 1 },

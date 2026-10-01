@@ -141,8 +141,9 @@ test('win scenarios, combined search and review carry the same gains into the si
     page.locator('.trade-impact').first().locator('strong'),
   ).toHaveText(gains[0]);
   await expect(page.locator('.partner-impact strong')).toHaveText(gains[1]);
+  // Outcome objectives re-rank their shortlist with a fixed simulation count.
   await expect(
-    page.getByText('Reviewed using 8 outcome scenarios', { exact: false }),
+    page.getByText('Reviewed using 512 outcome scenarios', { exact: false }),
   ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(

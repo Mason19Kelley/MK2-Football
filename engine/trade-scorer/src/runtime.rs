@@ -9,6 +9,11 @@ pub struct Model {
     slots: Vec<usize>,
     players: Vec<Player>,
     specialists: Vec<Vec<usize>>,
+    // Per-week free agents for one-week fills of temporary vacancies.
+    #[serde(default)]
+    fills: Vec<Vec<usize>>,
+    #[serde(skip)]
+    core_slots: Vec<usize>,
     #[serde(skip)]
     identities: Vec<usize>,
     #[serde(skip)]
@@ -74,14 +79,20 @@ impl Model {
                 .players
                 .iter()
                 .any(|p| p.position > 5 || p.weekly.len() != weeks || p.unavailable.len() != weeks)
-            || model.specialists.iter().enumerate().any(|(w, indices)| {
-                indices.iter().any(|&i| {
-                    model
-                        .players
-                        .get(i)
-                        .is_none_or(|p| p.ir || p.weekly[w].is_none())
+            || (!model.fills.is_empty() && model.fills.len() != weeks)
+            || model
+                .specialists
+                .iter()
+                .chain(model.fills.iter())
+                .enumerate()
+                .any(|(w, indices)| {
+                    indices.iter().any(|&i| {
+                        model
+                            .players
+                            .get(i)
+                            .is_none_or(|p| p.ir || p.weekly[w % weeks].is_none())
+                    })
                 })
-            })
         {
             return Err("invalid scoring model".into());
         }
@@ -95,6 +106,13 @@ impl Model {
                 let next = identities.len();
                 *identities.entry(p.id).or_insert(next)
             })
+            .collect();
+        // K and D/ST (slot indices 4 and 5) are streamed separately.
+        model.core_slots = model
+            .slots
+            .iter()
+            .copied()
+            .filter(|&s| s != 4 && s != 5)
             .collect();
         model.owned.resize(identities.len(), 0);
         model.seen.resize(identities.len(), 0);
@@ -138,6 +156,11 @@ impl Model {
             }
         }));
         let base = lineup(candidates, &self.slots, &self.players);
+        let base_complete = !self.core_slots.is_empty()
+            && lineup(candidates, &self.core_slots, &self.players)
+                .selected
+                .len()
+                == self.core_slots.len();
         output.clear();
         output.extend([
             base.total,
@@ -180,7 +203,65 @@ impl Model {
                     });
                 }
             }
-            let result = lineup(candidates, &self.slots, &self.players);
+            let mut result = lineup(candidates, &self.slots, &self.players);
+            // Mirrors evaluateRoster's bye fills: owned players keep priority,
+            // free agents only cover vacancies, a bench player is
+            // dropped for the week and re-added, and real points are summed.
+            let vacancies = self.slots.len() - result.selected.len();
+            let fills = self.fills.get(week).map_or(&[][..], |f| &f[..]);
+            if vacancies > 0 && base_complete && !fills.is_empty() {
+                let owned = &self.owned;
+                let identities = &self.identities;
+                let picked: Vec<usize> = result
+                    .selected
+                    .iter()
+                    .copied()
+                    .filter(|&i| owned[identities[i]] != generation)
+                    .collect();
+                let mut all: Vec<Candidate> = candidates
+                    .iter()
+                    .filter(|c| owned[identities[c.index]] == generation)
+                    .map(|c| Candidate {
+                        index: c.index,
+                        score: c.score,
+                        eligibility: c.eligibility,
+                    })
+                    .collect();
+                let owned_count = all.len();
+                for &i in &picked {
+                    all.push(Candidate {
+                        index: i,
+                        score: self.players[i].weekly[week].unwrap_or(0.0),
+                        eligibility: self.players[i].eligibility,
+                    });
+                }
+                for &i in fills {
+                    if owned[identities[i]] == generation
+                        || picked.iter().any(|&j| identities[j] == identities[i])
+                    {
+                        continue;
+                    }
+                    all.push(Candidate {
+                        index: i,
+                        score: self.players[i].weekly[week].unwrap(),
+                        eligibility: self.players[i].eligibility,
+                    });
+                }
+                let bonus = 1.0 + all.iter().map(|c| c.score.abs()).sum::<f64>();
+                for c in &mut all[..owned_count] {
+                    c.score += bonus;
+                }
+                let supplemented = lineup(&all, &self.slots, &self.players);
+                let total = supplemented
+                    .selected
+                    .iter()
+                    .map(|&i| self.players[i].weekly[week].unwrap_or(0.0))
+                    .sum();
+                result = super::Lineup {
+                    total,
+                    selected: supplemented.selected,
+                };
+            }
             output.extend([result.total, result.selected.len() as f64, missing as f64]);
             output.extend(result.selected.iter().map(|&i| i as f64));
             for &i in &result.selected {

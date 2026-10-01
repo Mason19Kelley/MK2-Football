@@ -272,6 +272,8 @@ test('bounded pickup shortlists match exhaustive shortlists for weekly point pla
           key,
           (value = evaluateForecastRoster(league, roster, 'remaining', {
             specialistCache,
+            // The pickup bound assumes drops never raise a total.
+            byeFills: false,
           })),
         );
       return value;

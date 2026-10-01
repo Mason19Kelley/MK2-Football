@@ -14,7 +14,6 @@ import {
   TradePlan,
   tradePickupCandidates,
   NonImprovingTradeError,
-  pickupGainBound,
 } from './trade-plans';
 import {
   evaluateForecastRoster,
@@ -369,13 +368,6 @@ export async function findTrades(
     pruneUnusedDrops:
       waiverBaseline && !options.scenarios && objective === 'points',
   };
-  const pickupBounds =
-    waiverBaseline && !hasBounds && !options.scenarios
-      ? {
-          mine: pickupGainBound(league, horizon),
-          partner: pickupGainBound(league, options.partnerHorizon ?? horizon),
-        }
-      : undefined;
   const currentEvaluations = new Map(
     league.teams.map((t) => [t.id, evaluate(t.players)]),
   );
@@ -716,7 +708,9 @@ export async function findTrades(
                                 options.minimumGain)
                           );
                         },
-                        pickupGain: pickupBounds,
+                        // No pickup gain bound: with bye fills, dropping a
+                        // weak backup can let a better free agent fill a
+                        // week, so drops can raise a total.
                       }
                     : undefined,
                 comparePlans: (a, b) =>

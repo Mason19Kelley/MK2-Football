@@ -3,6 +3,7 @@ import {
   horizonWeeks,
   playerWeek,
   specialistStreamingCandidates,
+  weeklyReplacementCandidates,
   TradeEvaluation,
   TradeHorizon,
 } from './weekly-trades';
@@ -89,7 +90,7 @@ export async function createWasmScorer(
     })());
   const { instance } = await WebAssembly.instantiate(moduleBytes, {});
   const api = instance.exports as unknown as ScorerExports;
-  if (typeof api.scorer_version !== 'function' || api.scorer_version() !== 1)
+  if (typeof api.scorer_version !== 'function' || api.scorer_version() !== 2)
     throw new Error('Unsupported scorer ABI');
   const error = () =>
     new TextDecoder().decode(
@@ -168,6 +169,12 @@ export async function createWasmScorer(
       unavailable: values.map((v) => v.unavailable),
     })),
     specialists,
+    // One-week fills for temporary vacancies, as in evaluateRoster.
+    fills: allWeeks.map((week) =>
+      weeklyReplacementCandidates(league, week).map((p) =>
+        indices.active.get(p.id)!,
+      ),
+    ),
   };
   const encoded = new TextEncoder().encode(JSON.stringify(model));
   const loadPointer = api.benchmark_alloc(encoded.length);

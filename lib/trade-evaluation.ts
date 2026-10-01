@@ -366,6 +366,7 @@ export function evaluateForecastRoster(
   horizon: TradeHorizon,
   options: {
     streaming?: boolean;
+    byeFills?: boolean;
     streamSpecialists?: boolean;
     scenarios?: ScenarioSettings;
     scenarioCache?: ScenarioCache;
@@ -394,6 +395,7 @@ export function evaluateForecastRoster(
     options.replacementCache,
     {
       streaming: options.streaming ?? false,
+      byeFills: options.byeFills,
       streamSpecialists: options.streamSpecialists,
       specialistCache: options.specialistCache,
     },
@@ -408,6 +410,7 @@ export function evaluateForecastRoster(
         options.replacementCache,
         {
           streaming: options.streaming ?? false,
+          byeFills: options.byeFills,
           streamSpecialists: options.streamSpecialists,
           specialistCache: options.specialistCache,
         },
@@ -467,7 +470,14 @@ export function evaluateForecastRoster(
             week,
             options.specialistCache,
           );
-    const weeklyRoster = [...lower, ...candidates];
+    // One-week free-agent fills chosen by the forecast lineup join the roster
+    // for that week; random scenario absences are not refilled.
+    const ids = new Set([...lower, ...candidates].map((p) => p.id));
+    const fills =
+      base.weeks
+        .find((w) => w.week === week)
+        ?.replacements.filter((p) => !ids.has(p.id)) ?? [];
+    const weeklyRoster = [...lower, ...candidates, ...fills];
     for (let sample = 0; sample < settings.samples; sample++) {
       const forecast = weeklyRoster.map((p) => {
         if (p.currentGame?.week === week && p.currentGame.state !== 'scheduled')

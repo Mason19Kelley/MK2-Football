@@ -142,5 +142,6 @@ pub extern "C" fn scorer_clear() {
 }
 #[no_mangle]
 pub extern "C" fn scorer_version() -> u32 {
-    1
+    // 2: one-week bye fills.
+    2
 }

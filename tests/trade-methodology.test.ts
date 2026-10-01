@@ -855,3 +855,78 @@ test('weekly score shapes keep the forecast mean and spread without impossible w
   assert.equal(scoreDraw('gamma', 'WR', 10, 0, 2), 10);
   assert.equal(scoreDraw('lognormal', 'WR', 10, 0, 2), 10);
 });
+
+test('bye fills stream a free agent into a temporary vacancy for that week only', () => {
+  const league: League = {
+    ...fixture(),
+    week: 1,
+    finalWeek: 3,
+    slots: [
+      { id: 0, label: 'QB', count: 1 },
+      { id: 2, label: 'RB', count: 1 },
+    ],
+    teams: [
+      team(1, [
+        { ...player(1, [20, 20, 20]), byeWeek: 2 },
+        player(2, [10, 10, 10], 2),
+        player(3, [5, 5, 5], 2),
+      ]),
+    ],
+    waiverWire: {
+      syncedAt: '',
+      truncated: false,
+      players: [
+        {
+          ...player(9, [15, 15, 15]),
+          availability: 'FREEAGENT',
+          percentOwned: 0,
+        },
+      ],
+    },
+  };
+  const roster = league.teams[0].players;
+  const filled = evaluateRoster(
+    league,
+    roster,
+    'remaining',
+    undefined,
+    undefined,
+    {
+      streaming: false,
+    },
+  );
+  assert.deepEqual(
+    filled.weeks.map((w) => w.total),
+    [30, 25, 30],
+  );
+  assert.deepEqual(
+    filled.weeks[1].replacements.map((p) => p.id),
+    [9],
+  );
+  const off = evaluateRoster(
+    league,
+    roster,
+    'remaining',
+    undefined,
+    undefined,
+    {
+      streaming: false,
+      byeFills: false,
+    },
+  );
+  assert.equal(off.weeks[1].total, 10);
+  // A roster with no player for a slot gets no fill: the hole is permanent.
+  const noRb = evaluateRoster(
+    league,
+    roster.filter((p) => p.id === 1),
+    'remaining',
+    undefined,
+    undefined,
+    { streaming: false },
+  );
+  assert.equal(noRb.weeks[1].total, 0);
+  const simulated = evaluateForecastRoster(league, roster, 'remaining', {
+    scenarios: { ...scenarios, samples: 8 },
+  });
+  assert.ok(simulated.scenarioWeeks![2].every((n) => Math.abs(n - 25) < 1e-9));
+});
