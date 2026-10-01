@@ -20,6 +20,8 @@ export type TradeRosterEngine = {
     roster: Player[],
     horizon: TradeHorizon,
   ) => TradeEvaluation | undefined;
+  // Search summaries defer display metadata until a surviving offer reads it.
+  evaluateForSearch?: TradeRosterEngine['evaluate'];
   dispose: () => void;
 };
 type ScorerExports = {
@@ -176,57 +178,74 @@ export async function createWasmScorer(
     api.benchmark_free(pointer, capacity * 4);
     api.scorer_clear();
   };
-  return {
-    dispose,
-    evaluate(roster, horizon) {
-      if (!active || horizon === 'ros') return;
-      const relevant = roster.filter((p) =>
-        league.slots.some((s) => s.count > 0 && p.eligibleSlots.includes(s.id)),
+  const evaluate = (
+    roster: Player[],
+    horizon: TradeHorizon,
+    eager: boolean,
+  ): TradeEvaluation | undefined => {
+    if (!active || horizon === 'ros') return;
+    const relevant = roster.filter((p) =>
+      league.slots.some((s) => s.count > 0 && p.eligibleSlots.includes(s.id)),
+    );
+    if (relevant.length > capacity) return;
+    const offsets: number[] = [];
+    for (const p of relevant) {
+      const index = indices.get(identity(p));
+      if (index === undefined) return;
+      offsets.push(index);
+    }
+    const weeks = horizonWeeks(league, horizon);
+    const first = weeks.length ? allWeeks.indexOf(weeks[0]) : allWeeks.length;
+    const last = first + weeks.length;
+    try {
+      const view = new DataView(api.memory.buffer, pointer, capacity * 4);
+      offsets.forEach((index, i) => view.setUint32(i * 4, index, true));
+      if (!api.scorer_evaluate(pointer, offsets.length, first, last))
+        throw new Error(error());
+      const result = new Float64Array(
+        api.memory.buffer,
+        api.scorer_output_ptr(),
+        api.scorer_output_len(),
       );
-      if (relevant.length > capacity) return;
-      const offsets: number[] = [];
-      for (const p of relevant) {
-        const index = indices.get(identity(p));
-        if (index === undefined) return;
-        offsets.push(index);
+      const filled = result[1],
+        slots = result[2],
+        complete = Boolean(result[3]);
+      // WASM overwrites its output on the next score. Keep a compact numeric
+      // snapshot, then reconstruct Player arrays only for baseline/final offers.
+      const snapshot = result.slice();
+      let cursor = 4 + filled;
+      let total = 0,
+        missing = 0;
+      const used = new Set<number>();
+      for (let w = 0; w < weeks.length; w++) {
+        total += snapshot[cursor++];
+        const selected = snapshot[cursor++];
+        missing += snapshot[cursor++];
+        for (let i = 0; i < selected; i++)
+          used.add(entries[snapshot[cursor++]].player.id);
       }
-      const weeks = horizonWeeks(league, horizon);
-      const first = weeks.length ? allWeeks.indexOf(weeks[0]) : allWeeks.length;
-      const last = first + weeks.length;
-      try {
-        const view = new DataView(api.memory.buffer, pointer, capacity * 4);
-        offsets.forEach((index, i) => view.setUint32(i * 4, index, true));
-        if (!api.scorer_evaluate(pointer, offsets.length, first, last))
-          throw new Error(error());
-        const result = new Float64Array(
-          api.memory.buffer,
-          api.scorer_output_ptr(),
-          api.scorer_output_len(),
-        );
-        const filled = result[1],
-          slots = result[2],
-          complete = Boolean(result[3]);
+      let details: Pick<TradeEvaluation, 'players' | 'weeks'> | undefined;
+      const materialize = () => {
+        if (details) return details;
         let cursor = 4;
         const current = new Map(
           offsets.map((index, i) => [index, relevant[i]]),
         );
         const players = Array.from({ length: filled }, () =>
-          current.get(result[cursor++])!,
+          current.get(snapshot[cursor++])!,
         );
         const owned = new Set(roster.map((p) => p.id));
-        const used = new Set<number>();
         const lineups = weeks.map((week, w) => {
-          const total = result[cursor++],
-            filled = result[cursor++],
-            missing = result[cursor++];
+          const total = snapshot[cursor++],
+            filled = snapshot[cursor++],
+            missing = snapshot[cursor++];
           const selected = Array.from(
             { length: filled },
-            () => result[cursor++],
+            () => snapshot[cursor++],
           );
           const players = selected.map(
             (index) => entries[index].projected[first + w],
           );
-          players.forEach((p) => used.add(p.id));
           return {
             total,
             filled,
@@ -242,26 +261,34 @@ export async function createWasmScorer(
             unknownByes: players.filter((p) => p.byeWeek === undefined).length,
           };
         });
-        return {
-          total: lineups.reduce((sum, w) => sum + w.total, 0),
-          filled,
-          slots,
-          players,
-          complete,
-          missing: lineups.reduce((sum, w) => sum + w.missing, 0),
-          weeks: lineups,
-          upperTotal: lineups.reduce((sum, w) => sum + w.total, 0),
-          bounded: false,
-          usedPlayerIds: [...used],
-        };
-      } catch (failure) {
-        dispose();
-        console.warn(
-          'WASM scoring failed; continuing with TypeScript.',
-          failure,
-        );
-        return;
-      }
-    },
+        return (details = { players, weeks: lineups });
+      };
+      if (eager) materialize();
+      return {
+        total,
+        filled,
+        slots,
+        get players() {
+          return materialize().players;
+        },
+        complete,
+        missing,
+        get weeks() {
+          return materialize().weeks;
+        },
+        upperTotal: total,
+        bounded: false,
+        usedPlayerIds: [...used],
+      };
+    } catch (failure) {
+      dispose();
+      console.warn('WASM scoring failed; continuing with TypeScript.', failure);
+      return;
+    }
+  };
+  return {
+    dispose,
+    evaluate: (roster, horizon) => evaluate(roster, horizon, true),
+    evaluateForSearch: (roster, horizon) => evaluate(roster, horizon, false),
   };
 }

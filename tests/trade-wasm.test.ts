@@ -194,3 +194,23 @@ test('unsupported scoring modes bypass WASM without fetching or instantiating it
   };
   assert.equal(supportsWasmScoring(customSlots, options), false);
 });
+
+test('compact search evaluations retain full metadata after subsequent scores and disposal', async () => {
+  const scorer = await createWasmScorer(demoLeague, options, await binary());
+  assert.ok(scorer?.evaluateForSearch);
+  const roster = demoLeague.teams[0].players;
+  const summary = scorer.evaluateForSearch(roster, 'remaining');
+  assert.ok(summary);
+  assert.equal(
+    typeof Object.getOwnPropertyDescriptor(summary, 'weeks')?.get,
+    'function',
+  );
+  const expected = evaluateForecastRoster(demoLeague, roster, 'remaining');
+  assert.equal(summary.total, expected.total);
+  scorer.evaluateForSearch(demoLeague.teams[1].players, 'next3');
+  scorer.dispose();
+  close(
+    JSON.parse(JSON.stringify(summary)),
+    JSON.parse(JSON.stringify(expected)),
+  );
+});

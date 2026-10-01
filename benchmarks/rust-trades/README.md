@@ -115,3 +115,18 @@ The October 1 measured pairing (MECHANIC/Team 3, TonyTwoTimes/Team 1), weeks 4�
 | Rust WebAssembly |  8.00 s |
 
 This single paired run was **2.86× faster**. The full returned search results matched, including baseline plans and lineup details, within a 1e-7 score tolerance and exact metadata equality. This pairing produced zero qualifying offers; unit and browser fixtures additionally verify positive offers and unequal trades. Results are machine/workload specific. The complete-search report is written to the ignored local `data/trade-history/rust-benchmark/search-report.json`.
+
+## Search optimization comparison
+
+An October 1 follow-up compared the previous application implementation with the optimized implementation in alternating, fresh Chromium workers, three runs per version. Both used the same forecast snapshot, Team 3 → Team 1, remaining weeks 4–17, minimum gains 1, and 182 one-for-one packages. Timings include scorer initialization, search, and full result metadata reconstruction; they exclude Next.js startup and UI rendering.
+
+| Version | Complete-search runs | Median |
+| --- | --- | ---: |
+| Previous WASM search | 8.429 / 8.317 / 8.001 s | 8.317 s |
+| Optimized WASM search | 2.774 / 2.715 / 2.732 s | 2.732 s |
+
+The median speedup was **3.04×**, with complete returned results matching to a 1e-7 numeric tolerance and exact metadata equality in every run. Both versions evaluated 150,460 rosters; this pairing still produced zero qualifying offers. Positive offers, all five rankings, pickup conflicts, unequal packages, ties, and scenario draw parity are covered separately by tests.
+
+The changes replace repeated Rust membership hashing with indexed flags, reuse runtime scoring buffers, defer lineup display objects until needed, and shortlist deterministic point plans after independent gain checks. Only the best two distinct acquisition choices per team are needed for the supported monotone rankings, reducing joint plan enumeration to at most four combinations per package. Scenario and non-improving review searches retain exhaustive joint planning. Drop upper bounds also discard variants that cannot beat the selected move's score or depth tie-breaks. Scenario forecasts and keyed random draws are cached as numeric arrays for each search.
+
+These measurements establish the speedup for this machine and workload, rather than a general guarantee for every league or search mode. In particular, the timing comparison does not measure scenario-mode gains.

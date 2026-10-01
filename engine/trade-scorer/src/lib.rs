@@ -51,8 +51,8 @@ fn lineup(candidates: &[Candidate], slots: &[usize], players: &[Player]) -> Line
     if counts[6] > 1 {
         return matching(candidates, slots);
     }
-    let mut groups: [Vec<&Candidate>; 6] = std::array::from_fn(|_| Vec::new());
-    for c in candidates {
+    let mut groups: [Vec<usize>; 6] = std::array::from_fn(|_| Vec::new());
+    for (offset, c) in candidates.iter().enumerate() {
         let eligibility = c.eligibility & starting;
         if eligibility == 0 {
             continue;
@@ -72,43 +72,45 @@ fn lineup(candidates: &[Candidate], slots: &[usize], players: &[Player]) -> Line
         if eligibility != expected {
             return matching(candidates, slots);
         }
-        groups[position].push(c);
+        groups[position].push(offset);
     }
-    let mut chosen = HashSet::new();
+    let mut chosen = vec![false; candidates.len()];
     let mut flex = Vec::new();
     for (position, group) in groups.iter_mut().enumerate() {
-        group.sort_by(|a, b| b.score.total_cmp(&a.score));
+        group.sort_by(|&a, &b| candidates[b].score.total_cmp(&candidates[a].score));
         let count = counts[position].min(group.len());
         if count > 0
             && count < group.len()
-            && (group[count - 1].score - group[count].score).abs() <= 1e-8
+            && (candidates[group[count - 1]].score - candidates[group[count]].score).abs() <= 1e-8
         {
             return matching(candidates, slots);
         }
-        for c in &group[..count] {
-            chosen.insert(c.index);
+        for &offset in &group[..count] {
+            chosen[offset] = true;
         }
         if (1..=3).contains(&position) {
             flex.extend_from_slice(&group[count..]);
         }
     }
     if counts[6] > 0 && !flex.is_empty() {
-        flex.sort_by(|a, b| b.score.total_cmp(&a.score));
-        if flex.len() > 1 && (flex[0].score - flex[1].score).abs() <= 1e-8 {
+        flex.sort_by(|&a, &b| candidates[b].score.total_cmp(&candidates[a].score));
+        if flex.len() > 1 && (candidates[flex[0]].score - candidates[flex[1]].score).abs() <= 1e-8 {
             return matching(candidates, slots);
         }
-        chosen.insert(flex[0].index);
+        chosen[flex[0]] = true;
     }
     let selected = candidates
         .iter()
-        .filter(|c| chosen.contains(&c.index))
-        .map(|c| c.index)
+        .enumerate()
+        .filter(|(offset, _)| chosen[*offset])
+        .map(|(_, c)| c.index)
         .collect();
     Lineup {
         total: candidates
             .iter()
-            .filter(|c| chosen.contains(&c.index))
-            .map(|c| c.score)
+            .enumerate()
+            .filter(|(offset, _)| chosen[*offset])
+            .map(|(_, c)| c.score)
             .sum(),
         selected,
     }

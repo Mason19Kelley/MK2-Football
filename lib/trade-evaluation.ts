@@ -66,6 +66,132 @@ function normal(key: string) {
     Math.cos(2 * Math.PI * uniform(key + ':v'))
   );
 }
+export type ScenarioCache = {
+  league: League;
+  settings: ScenarioSettings;
+  forecast: (player: Player, week: number, sample: number) => Player;
+  noise: (player: Player, week: number, sample: number) => number;
+};
+
+// A search uses immutable forecasts and assumptions. Retain compact numeric
+// arrays rather than one cloned Player per player/week/sample combination.
+export function createScenarioCache(
+  league: League,
+  settings: ScenarioSettings,
+): ScenarioCache {
+  validateScenarios(settings);
+  const roles = new Map<number, Float64Array>();
+  const forecasts = new Map<
+    string,
+    Map<
+      number,
+      {
+        means?: Float64Array;
+        available: Uint8Array;
+        recovered: boolean;
+      }
+    >
+  >();
+  const individual = new Map<number, Map<number, Float64Array>>();
+  const common = new Map<string, Map<number, Float64Array>>();
+  const emptySlots: number[] = [];
+  const commonWeight = Math.sqrt(settings.teamCorrelation);
+  const individualWeight = Math.sqrt(1 - settings.teamCorrelation);
+  const draws = <K>(
+    cache: Map<K, Map<number, Float64Array>>,
+    identity: K,
+    week: number,
+    key: (sample: number) => string,
+  ) => {
+    let weeks = cache.get(identity);
+    if (!weeks) cache.set(identity, (weeks = new Map()));
+    let values = weeks.get(week);
+    if (!values) {
+      values = Float64Array.from({ length: settings.samples }, (_, sample) =>
+        normal(key(sample)),
+      );
+      weeks.set(week, values);
+    }
+    return values;
+  };
+  return {
+    league,
+    settings,
+    forecast(p, week, sample) {
+      // Specialist copies restrict eligibility and can carry a different weekly
+      // value; IR and active copies must also remain separate.
+      const identity = `${p.id}:${p.slotId === 21}:${p.weekly}:${p.eligibleSlots.join(',')}`;
+      let weeks = forecasts.get(identity);
+      if (!weeks) forecasts.set(identity, (weeks = new Map()));
+      let prepared = weeks.get(week);
+      if (!prepared) {
+        const recovered = p.returnWeek !== undefined && week >= p.returnWeek;
+        const value = playerWeek(
+          recovered
+            ? {
+                ...p,
+                slotId: p.slotId === 21 ? 20 : p.slotId,
+                status: 'ACTIVE',
+              }
+            : p,
+          league,
+          week,
+        );
+        let role = roles.get(p.id);
+        if (!role) {
+          role = Float64Array.from({ length: settings.samples }, (_, sample) =>
+            normal(`${settings.seed}:${sample}:${p.id}:role`),
+          );
+          roles.set(p.id, role);
+        }
+        const probability = p.availabilityProbability ?? settings.availability;
+        const means =
+          value.points === null
+            ? undefined
+            : new Float64Array(settings.samples);
+        const available = new Uint8Array(settings.samples);
+        for (let sample = 0; sample < settings.samples; sample++) {
+          available[sample] = Number(
+            !value.unavailable &&
+              (p.returnWeek === undefined || week >= p.returnWeek) &&
+              uniform(
+                `${settings.seed}:${sample}:${p.id}:${week}:availability`,
+              ) < probability,
+          );
+          if (means)
+            means[sample] =
+              value.points! *
+              Math.max(0, 1 + role[sample] * (p.roleStdDev ?? settings.roleCv));
+        }
+        weeks.set(week, (prepared = { means, available, recovered }));
+      }
+      return {
+        ...p,
+        slotId: prepared.recovered && p.slotId === 21 ? 20 : p.slotId,
+        eligibleSlots: prepared.available[sample]
+          ? p.eligibleSlots
+          : emptySlots,
+        weekly: prepared.means ? prepared.means[sample] : null,
+      };
+    },
+    noise(p, week, sample) {
+      const team = String(p.nflTeam === 'FA' ? p.id : p.nflTeam);
+      const shared = draws(
+        common,
+        team,
+        week,
+        (sample) => `${settings.seed}:${sample}:${week}:nfl:${team}`,
+      );
+      const own = draws(
+        individual,
+        p.id,
+        week,
+        (sample) => `${settings.seed}:${sample}:${week}:score:${p.id}`,
+      );
+      return commonWeight * shared[sample] + individualWeight * own[sample];
+    },
+  };
+}
 export function quantile(values: number[], fraction: number) {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -122,6 +248,7 @@ export function evaluateForecastRoster(
     streaming?: boolean;
     streamSpecialists?: boolean;
     scenarios?: ScenarioSettings;
+    scenarioCache?: ScenarioCache;
     projectionCache?: Map<number, Map<number, ReturnType<typeof playerWeek>>>;
     replacementCache?: Map<number, Player[]>;
     specialistCache?: Map<number, Player[]>;
@@ -184,6 +311,11 @@ export function evaluateForecastRoster(
       'Outcome scenarios need point forecasts. Resolve bounded missing forecasts or use conservative points mode.',
     );
   const settings = options.scenarios;
+  const scenarioCache =
+    options.scenarioCache?.league === league &&
+    options.scenarioCache.settings === settings
+      ? options.scenarioCache
+      : undefined;
   validateScenarios(settings);
   for (const p of relevant) {
     if (
@@ -218,6 +350,7 @@ export function evaluateForecastRoster(
     const weeklyRoster = [...lower, ...candidates];
     for (let sample = 0; sample < settings.samples; sample++) {
       const forecast = weeklyRoster.map((p) => {
+        if (scenarioCache) return scenarioCache.forecast(p, week, sample);
         // Return weeks are explicit assumptions. IR activation requires a roster plan in reality.
         const recovered = p.returnWeek !== undefined && week >= p.returnWeek;
         const value = playerWeek(
@@ -253,14 +386,19 @@ export function evaluateForecastRoster(
       if (sample === 0) missing += selected.missing;
       const score = selected.players.reduce((sum, p) => {
         const mean = p.weekly!;
-        const key = `${settings.seed}:${sample}:${week}`;
-        const common = normal(
-          `${key}:nfl:${p.nflTeam === 'FA' ? p.id : p.nflTeam}`,
-        );
-        const individual = normal(`${key}:score:${p.id}`);
-        const noise =
-          Math.sqrt(settings.teamCorrelation) * common +
-          Math.sqrt(1 - settings.teamCorrelation) * individual;
+        const noise = scenarioCache
+          ? scenarioCache.noise(p, week, sample)
+          : (() => {
+              const key = `${settings.seed}:${sample}:${week}`;
+              const common = normal(
+                `${key}:nfl:${p.nflTeam === 'FA' ? p.id : p.nflTeam}`,
+              );
+              const individual = normal(`${key}:score:${p.id}`);
+              return (
+                Math.sqrt(settings.teamCorrelation) * common +
+                Math.sqrt(1 - settings.teamCorrelation) * individual
+              );
+            })();
         return (
           sum +
           mean +

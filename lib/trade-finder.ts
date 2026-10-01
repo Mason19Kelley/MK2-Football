@@ -13,12 +13,14 @@ import {
   RosterMove,
   TradePlan,
   tradePickupCandidates,
+  NonImprovingTradeError,
 } from './trade-plans';
 import {
   evaluateForecastRoster,
   ScenarioSettings,
   summarizeGains,
   validateScenarios,
+  createScenarioCache,
 } from './trade-evaluation';
 import {
   evaluateLeagueOutcomes,
@@ -223,6 +225,9 @@ export async function findTrades(
   >();
   const replacementCache = new Map<number, Player[]>();
   const specialistCache = new Map<number, Player[]>();
+  const scenarioCache = options.scenarios
+    ? createScenarioCache(league, options.scenarios)
+    : undefined;
   let phase: TradeSearchProgress['phase'] = 'preparing';
   let evaluatedRosters = 0;
   let checked = 0;
@@ -250,7 +255,7 @@ export async function findTrades(
       return previous;
     }
     const value =
-      engine?.evaluate(roster, period) ??
+      (engine?.evaluateForSearch ?? engine?.evaluate)?.(roster, period) ??
       (!waiverBaseline &&
       !options.scenarios &&
       !roster.some((p) => p.projectionBounds)
@@ -264,6 +269,7 @@ export async function findTrades(
           )
         : evaluateForecastRoster(league, roster, period, {
             scenarios: options.scenarios,
+            scenarioCache,
             streaming: !waiverBaseline && !options.scenarios,
             projectionCache,
             replacementCache,
@@ -612,6 +618,36 @@ export async function findTrades(
               {
                 ...moveOptions,
                 evaluatePartner,
+                independentPoints:
+                  objective === 'points' &&
+                  !options.scenarios &&
+                  !options.includeNonImproving
+                    ? {
+                        mine: (value) => {
+                          const gain =
+                            value.total - (before.upperTotal ?? before.total);
+                          return (
+                            value.complete &&
+                            value.missing === 0 &&
+                            gain > 0.05 &&
+                            gain + 1e-8 >= options.minimumGain
+                          );
+                        },
+                        partner: (value) => {
+                          const gain =
+                            value.total -
+                            (partnerBefore.upperTotal ?? partnerBefore.total);
+                          return (
+                            value.complete &&
+                            value.missing === 0 &&
+                            gain > 0.05 &&
+                            gain + 1e-8 >=
+                              (options.partnerMinimumGain ??
+                                options.minimumGain)
+                          );
+                        },
+                      }
+                    : undefined,
                 comparePlans: (a, b) =>
                   Number(valid(get(b))) - Number(valid(get(a))) ||
                   rankTrades(get(a), get(b), options.ranking) ||
@@ -641,14 +677,19 @@ export async function findTrades(
               }
             }
           } catch (err) {
-            if (
-              !(err instanceof Error) ||
-              !/No eligible player can be dropped|at most one extra player/.test(
-                err.message,
+            if (err instanceof NonImprovingTradeError) {
+              // A legal package failed independent gain thresholds or its
+              // only qualifying plans competed for the same free agent.
+            } else {
+              if (
+                !(err instanceof Error) ||
+                !/No eligible player can be dropped|at most one extra player/.test(
+                  err.message,
+                )
               )
-            )
-              throw err;
-            unplannable++;
+                throw err;
+              unplannable++;
+            }
           }
           if (Date.now() - yieldedAt >= 25) {
             options.onProgress?.(checked, { phase, evaluatedRosters });

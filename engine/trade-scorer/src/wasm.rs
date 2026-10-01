@@ -71,6 +71,7 @@ pub extern "C" fn benchmark_error_len() -> usize {
 thread_local! {
     static MODEL: RefCell<Option<super::runtime::Model>> = const { RefCell::new(None) };
     static OUTPUT: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static ROSTER: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 /// # Safety
 /// ptr/len must identify a live benchmark_alloc allocation containing JSON.
@@ -103,19 +104,22 @@ pub unsafe extern "C" fn scorer_evaluate(
         fail("roster too large".into());
         return 0;
     };
-    let roster: Vec<usize> = std::slice::from_raw_parts(ptr, bytes_len)
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
-        .collect();
-    let result = MODEL.with(|cell| match cell.borrow().as_ref() {
-        Some(model) => model.evaluate(&roster, first, last),
-        None => Err("load a scoring model first".into()),
+    let result = ROSTER.with(|roster_cell| {
+        let mut roster = roster_cell.borrow_mut();
+        roster.clear();
+        roster.extend(
+            std::slice::from_raw_parts(ptr, bytes_len)
+                .chunks_exact(4)
+                .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize),
+        );
+        MODEL.with(|cell| match cell.borrow_mut().as_mut() {
+            Some(model) => OUTPUT
+                .with(|output| model.evaluate_into(&roster, first, last, &mut output.borrow_mut())),
+            None => Err("load a scoring model first".into()),
+        })
     });
     match result {
-        Ok(output) => {
-            OUTPUT.with(|cell| *cell.borrow_mut() = output);
-            1
-        }
+        Ok(()) => 1,
         Err(error) => {
             fail(error);
             0
@@ -132,6 +136,7 @@ pub extern "C" fn scorer_output_len() -> usize {
 }
 #[no_mangle]
 pub extern "C" fn scorer_clear() {
+    ROSTER.with(|cell| cell.borrow_mut().clear());
     MODEL.with(|cell| *cell.borrow_mut() = None);
     OUTPUT.with(|cell| cell.borrow_mut().clear());
 }

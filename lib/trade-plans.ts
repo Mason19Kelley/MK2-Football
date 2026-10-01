@@ -15,6 +15,11 @@ export type RosterMove = {
   capacitySource: 'league' | 'snapshot';
 };
 export type TradePlan = { mine: RosterMove; partner: RosterMove };
+export class NonImprovingTradeError extends Error {
+  constructor() {
+    super('No mutually improving roster plan.');
+  }
+}
 export type MoveOptions = {
   includePickup?: boolean;
   evaluate?: (players: Player[]) => RosterEvaluation;
@@ -114,7 +119,12 @@ export function rosterMoveCandidates(
           retainedDrops = [
             best,
             ...drops.filter(
-              (removed) => removed !== best && depth(removed) <= depth(best),
+              (removed) =>
+                removed !== best &&
+                (depth(removed) < depth(best) ||
+                  (!pickup &&
+                    depth(removed) === depth(best) &&
+                    removed[0].id < best[0].id)),
             ),
           ];
         }
@@ -217,6 +227,12 @@ export function planTrade(
   receive: number[],
   options: MoveOptions & {
     comparePlans?: (a: TradePlan, b: TradePlan) => number;
+    // Use only for independent point gains ranked monotonically after both
+    // teams pass their gain thresholds. Scenario/outcome rankings retain all plans.
+    independentPoints?: {
+      mine: (value: RosterEvaluation) => boolean;
+      partner: (value: RosterEvaluation) => boolean;
+    };
   } = {},
 ): TradePlan {
   if (league.tradesLocked)
@@ -237,7 +253,7 @@ export function planTrade(
       players,
       rosterCapacity: undefined,
     };
-  const myMoves = rosterMoveCandidates(
+  let myMoves = rosterMoveCandidates(
     league,
     team(mine),
     swapped.mine,
@@ -245,13 +261,57 @@ export function planTrade(
     options,
   );
   const evaluatePartner = options.evaluatePartner ?? evaluate;
-  const theirMoves = rosterMoveCandidates(
+  let theirMoves = rosterMoveCandidates(
     league,
     team(partner),
     swapped.theirs,
     send,
     { ...options, evaluate: evaluatePartner },
   );
+  // Preserve the distinction between an illegal joint transaction and a legal
+  // transaction that cannot improve both teams, including forced pickups.
+  const firstPickup = myMoves[0].pickup?.id;
+  if (
+    firstPickup !== undefined &&
+    myMoves.every((m) => m.pickup?.id === firstPickup) &&
+    theirMoves.every((m) => m.pickup?.id === firstPickup)
+  )
+    throw new Error(
+      'No eligible player can be dropped to produce a joint roster plan.',
+    );
+  if (options.independentPoints) {
+    const shortlist = (
+      moves: RosterMove[],
+      score: (players: Player[]) => RosterEvaluation,
+      accepts: (value: RosterEvaluation) => boolean,
+    ) => {
+      const bestByPickup = new Map<number | undefined, RosterMove>();
+      for (const move of moves) {
+        if (!accepts(score(move.roster))) continue;
+        const key = move.pickup?.id;
+        const previous = bestByPickup.get(key);
+        if (!previous || compareRosterMoves(move, previous, score) < 0)
+          bestByPickup.set(key, move);
+      }
+      // Only one acquisition can conflict. The best move and the best move
+      // with a different pickup suffice for a monotone two-team point ranking.
+      const selected = new Set(
+        [...bestByPickup.values()]
+          .sort((a, b) => compareRosterMoves(a, b, score))
+          .slice(0, 2),
+      );
+      // Keep enumeration order for exact comparator ties.
+      return moves.filter((m) => selected.has(m));
+    };
+    myMoves = shortlist(myMoves, evaluate, options.independentPoints.mine);
+    theirMoves = shortlist(
+      theirMoves,
+      evaluatePartner,
+      options.independentPoints.partner,
+    );
+    if (!myMoves.length || !theirMoves.length)
+      throw new NonImprovingTradeError();
+  }
   const compare =
     options.comparePlans ??
     ((a, b) => {
@@ -277,6 +337,7 @@ export function planTrade(
       const plan = { mine: myMove, partner: theirMove };
       if (!best || compare(plan, best) < 0) best = plan;
     }
+  if (!best && options.independentPoints) throw new NonImprovingTradeError();
   if (!best)
     throw new Error(
       'No eligible player can be dropped to produce a joint roster plan.',
