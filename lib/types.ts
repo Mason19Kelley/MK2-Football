@@ -1,3 +1,7 @@
+export const FANTASY_FINAL_WEEK = 17;
+export const fantasyFinalWeek = (league: Pick<League, 'finalWeek'>) =>
+  Math.min(league.finalWeek, FANTASY_FINAL_WEEK);
+
 export type Position = 'QB' | 'RB' | 'WR' | 'TE' | 'D/ST' | 'K';
 export type Player = {
   id: number;
@@ -103,6 +107,7 @@ export function removeIDPPlayers(league: League): League {
     ...p,
     eligibleSlots: p.eligibleSlots.filter((id) => !isIDPSlot(id)),
   });
+  league = normalizeFantasySeason(league);
   return {
     ...league,
     teams: league.teams.map((t) => ({
@@ -116,6 +121,81 @@ export function removeIDPPlayers(league: League): League {
             ...league.waiverWire,
             players: league.waiverWire.players.filter(supported).map(clean),
           },
+        }
+      : {}),
+  };
+}
+// Migrate saved snapshots once, before projections reach any dashboard totals.
+export function normalizeFantasySeason(league: League): League {
+  const finalWeek = fantasyFinalWeek(league);
+  const trim = <T>(values: Record<number, T> | undefined) =>
+    values &&
+    Object.fromEntries(
+      Object.entries(values).filter(([w]) => Number(w) <= finalWeek),
+    );
+  const clean = <T extends Player>(p: T): T => {
+    const oldWeeks = Math.max(0, league.finalWeek - league.week + 1);
+    const newWeeks = Math.max(0, finalWeek - league.week + 1);
+    const adjust = (value: number | null) => {
+      if (value === null || oldWeeks === newWeeks) return value;
+      if (!newWeeks) return 0;
+      const excluded = Array.from(
+        { length: league.finalWeek - finalWeek },
+        (_, i) => finalWeek + i + 1,
+      ).filter((w) => w >= league.week);
+      if (
+        p.projectionSource === 'weekly-sum' &&
+        excluded.every((w) => Number.isFinite(p.weeklyProjections?.[w]))
+      )
+        return (
+          value - excluded.reduce((sum, w) => sum + p.weeklyProjections![w], 0)
+        );
+      return (value * newWeeks) / oldWeeks;
+    };
+    return {
+      ...p,
+      ros: adjust(p.ros),
+      season:
+        league.finalWeek > finalWeek && p.season !== null
+          ? p.season - (p.weeklyProjections?.[18] ?? p.season / 17)
+          : p.season,
+      weekly: league.week > finalWeek ? null : p.weekly,
+      weeklyProjections: trim(p.weeklyProjections),
+      weeklyActuals: trim(p.weeklyActuals),
+      weeklyOverrides: trim(p.weeklyOverrides),
+      ...(p.projectionBounds
+        ? {
+            projectionBounds: {
+              ros: p.projectionBounds.ros && {
+                lower: adjust(p.projectionBounds.ros.lower)!,
+                upper: adjust(p.projectionBounds.ros.upper)!,
+              },
+              weekly: trim(p.projectionBounds.weekly),
+            },
+          }
+        : {}),
+    };
+  };
+  return {
+    ...league,
+    finalWeek,
+    teams: league.teams.map((t) => ({ ...t, players: t.players.map(clean) })),
+    ...(league.waiverWire
+      ? {
+          waiverWire: {
+            ...league.waiverWire,
+            players: league.waiverWire.players.map(clean),
+          },
+        }
+      : {}),
+    ...(league.matchups
+      ? {
+          matchups: league.matchups
+            .map((m) => ({
+              ...m,
+              weeks: m.weeks.filter((w) => w <= finalWeek),
+            }))
+            .filter((m) => m.weeks.length),
         }
       : {}),
   };

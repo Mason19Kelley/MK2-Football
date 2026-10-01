@@ -6,6 +6,7 @@ import {
 } from './espn';
 import { League, WaiverPlayer, WaiverWire, Player } from './types';
 import { optimalLineup } from './trades';
+import { evaluateRoster } from './weekly-trades';
 export type RawWaiverEntry = {
   id: number;
   onTeamId?: number;
@@ -97,17 +98,25 @@ export function compareWaiverMove(
   drop: Player | undefined,
   slots: League['slots'],
   metric: 'weekly' | 'ros',
+  league?: League,
 ) {
   if (drop && !roster.some((p) => p.id === drop.id))
     throw new Error('Drop player is not on your roster.');
   if (roster.some((p) => p.id === add.id))
     throw new Error('Player is already on your roster.');
-  const before = optimalLineup(roster, slots, metric);
+  const evaluate = (players: Player[]) =>
+    metric === 'ros' && league
+      ? evaluateRoster(league, players, 'remaining', undefined, undefined, {
+          streaming: false,
+          streamSpecialists: false,
+        })
+      : optimalLineup(players, slots, metric);
+  const before = evaluate(roster);
   const next = [
     ...roster.filter((p) => p.id !== drop?.id),
     { ...add, slotId: 20, slot: 'BN' },
   ];
-  const after = optimalLineup(next, slots, metric);
+  const after = evaluate(next);
   const complete =
     before.complete &&
     after.complete &&

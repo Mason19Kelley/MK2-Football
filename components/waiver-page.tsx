@@ -13,6 +13,7 @@ import {
 import { League, Player, Team, WaiverPlayer, points } from '@/lib/types';
 import { compareWaiverMove } from '@/lib/waivers';
 import Avatar from './player-avatar';
+import WaiverFinder from './waiver-finder';
 const positionOrder: Player['position'][] = [
   'QB',
   'RB',
@@ -60,9 +61,12 @@ export default function WaiverPage({
             (availability === 'Free agents' ? 'FREEAGENT' : 'WAIVERS')),
     )
     .sort(sort);
+  const openSpot =
+    mine.rosterCapacity !== undefined &&
+    mine.players.filter((p) => p.slotId !== 21).length < mine.rosterCapacity;
   const comparison =
-    add && drop
-      ? compareWaiverMove(mine.players, add, drop, league.slots, metric)
+    add && (drop || openSpot)
+      ? compareWaiverMove(mine.players, add, drop, league.slots, metric, league)
       : null;
   const playerDelta =
     add && drop && add[metric] !== null && drop[metric] !== null
@@ -71,7 +75,7 @@ export default function WaiverPage({
   const signed = (value: number) => `${value >= 0 ? '+' : ''}${points(value)}`;
   const period = metric === 'ros' ? 'ROS' : `Week ${league.week}`;
   const title =
-    !add || !drop
+    !add || (!drop && !openSpot)
       ? 'Could this pickup improve your team?'
       : !comparison?.complete
         ? 'Player comparison ready. Lineup data incomplete.'
@@ -89,8 +93,8 @@ export default function WaiverPage({
           <p>
             Select one player you could drop and one available player to compare
             their projections and your best eligible starting lineup. This is a
-            local simulation; claims, FAAB, waiver priority, weekly byes, and
-            roster limits are not modeled.
+            local simulation; claims, FAAB, and waiver priority are not modeled.
+            The finder checks roster limits and includes weekly byes.
           </p>
         </div>
       </div>
@@ -181,6 +185,18 @@ export default function WaiverPage({
               </select>
             </div>
           </div>
+          <WaiverFinder
+            league={league}
+            mine={mine}
+            position={position}
+            query={query}
+            availability={availability}
+            onReview={(pickup) => {
+              setAddId(pickup.add.id);
+              setDropId(pickup.drops[0]?.id ?? null);
+              setMetric('ros');
+            }}
+          />
           <div className="trade-grid waiver-grid">
             <section className="panel trade-picker">
               <div className="trade-picker-heading">
@@ -268,7 +284,8 @@ export default function WaiverPage({
               {wire.truncated
                 ? ' Pool limited to ESPN’s 4,000 most-owned available active players.'
                 : ''}{' '}
-              ROS estimates use the same method as your roster.
+              ROS estimates use the same method as your roster and end at week
+              17.
             </span>
           </div>
           <div
@@ -281,9 +298,9 @@ export default function WaiverPage({
               </span>
               <h3>{title}</h3>
               <p>
-                {!add || !drop
+                {!add || (!drop && !openSpot)
                   ? 'Choose one player on each side. You can compare different positions, including a bench drop.'
-                  : `${drop.name} → ${add.name}. ${!comparison?.complete ? 'Missing projections or unfilled eligible slots prevent a complete lineup comparison.' : 'Starting lineups are optimized independently before and after the move.'}`}
+                  : `${drop ? drop.name : 'Open roster spot'} → ${add.name}. ${!comparison?.complete ? 'Missing projections or unfilled eligible slots prevent a complete lineup comparison.' : 'Starting lineups are optimized independently before and after the move; ROS sums each remaining week through week 17.'}`}
               </p>
             </div>
             <div className="trade-impact">

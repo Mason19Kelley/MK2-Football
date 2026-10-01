@@ -1,4 +1,12 @@
-import { League, Player, Position, Team, slotNames, isIDPSlot } from './types';
+import {
+  League,
+  Player,
+  Position,
+  Team,
+  slotNames,
+  isIDPSlot,
+  FANTASY_FINAL_WEEK,
+} from './types';
 type Stats = {
   seasonId?: number;
   statSourceId?: number;
@@ -128,7 +136,7 @@ function weeklyPoints(stats: Stats[], source: number): Record<number, number> {
           s.statSplitTypeId === 1 &&
           Number.isInteger(s.scoringPeriodId) &&
           s.scoringPeriodId! >= 1 &&
-          s.scoringPeriodId! <= 18 &&
+          s.scoringPeriodId! <= FANTASY_FINAL_WEEK &&
           finite(s.appliedTotal) !== null,
       )
       .map((s) => [s.scoringPeriodId!, s.appliedTotal!]),
@@ -139,7 +147,7 @@ function weeklyPoints(stats: Stats[], source: number): Record<number, number> {
 export function seasonStatsFilter() {
   return {
     filterStatsForScoringPeriodIds: {
-      value: Array.from({ length: 19 }, (_, week) => week),
+      value: Array.from({ length: FANTASY_FINAL_WEEK + 1 }, (_, week) => week),
     },
     filterStatsForSourceIds: { value: [0, 1] },
   };
@@ -214,6 +222,7 @@ export function normalizePlayer(
   finalWeek: number,
   slotId = 20,
 ): Player {
+  finalWeek = Math.min(finalWeek, FANTASY_FINAL_WEEK);
   const position = pos[p.defaultPositionId ?? 0];
   if (!position) throw new Error('Unsupported player position.');
   const stats = (p.stats ?? []).filter((s) => s.seasonId === season);
@@ -237,7 +246,8 @@ export function normalizePlayer(
       (s) =>
         s.statSourceId === 1 &&
         s.statSplitTypeId === 1 &&
-        s.scoringPeriodId === week,
+        s.scoringPeriodId === week &&
+        week <= finalWeek,
     )?.appliedTotal,
   );
   const remainingWeeks = Math.max(0, finalWeek - week + 1);
@@ -279,7 +289,20 @@ export function normalizePlayer(
     status: p.injuryStatus ?? 'UNKNOWN',
     weekly,
     ros,
-    season: seasonPoints,
+    season:
+      seasonPoints === null
+        ? null
+        : seasonPoints -
+          (finite(
+            stats.find(
+              (s) =>
+                s.statSourceId === 1 &&
+                s.statSplitTypeId === 1 &&
+                s.scoringPeriodId === 18,
+            )?.appliedTotal,
+          ) ??
+            avg ??
+            0),
     actual,
     projectionSource,
     weeklyProjections: weeklyPoints(stats, 1),
@@ -295,7 +318,10 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
       'ESPN returned no teams. Check your league ID, season, and access.',
     );
   const week = raw.scoringPeriodId ?? 1,
-    finalWeek = raw.status?.finalScoringPeriod ?? 18;
+    finalWeek = Math.min(
+      raw.status?.finalScoringPeriod ?? FANTASY_FINAL_WEEK,
+      FANTASY_FINAL_WEEK,
+    );
   let estimated = 0,
     unavailable = 0;
   const slotCounts = raw.settings?.rosterSettings?.lineupSlotCounts;
@@ -399,17 +425,36 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
     ...(schedule?.playoffMatchupPeriodLength !== undefined
       ? { playoffRoundWeeks: schedule.playoffMatchupPeriodLength }
       : {}),
-    ...(raw.schedule ? {
-      matchups: raw.schedule.flatMap((matchup, index) => {
-        const period = matchup.matchupPeriodId;
-        const homeId = matchup.home?.teamId, awayId = matchup.away?.teamId;
-        if (!Number.isInteger(period) || !Number.isInteger(homeId) || !Number.isInteger(awayId)) return [];
-        const length = schedule?.matchupPeriodLength ?? 1;
-        const weeks = schedule?.matchupPeriods?.[String(period)]
-          ?? Array.from({ length }, (_, offset) => (period! - 1) * length + offset + 1);
-        return [{ id: matchup.id ?? index, weeks, homeId: homeId!, awayId: awayId! }];
-      }),
-    } : {}),
+    ...(raw.schedule
+      ? {
+          matchups: raw.schedule.flatMap((matchup, index) => {
+            const period = matchup.matchupPeriodId;
+            const homeId = matchup.home?.teamId,
+              awayId = matchup.away?.teamId;
+            if (
+              !Number.isInteger(period) ||
+              !Number.isInteger(homeId) ||
+              !Number.isInteger(awayId)
+            )
+              return [];
+            const length = schedule?.matchupPeriodLength ?? 1;
+            const weeks =
+              schedule?.matchupPeriods?.[String(period)] ??
+              Array.from(
+                { length },
+                (_, offset) => (period! - 1) * length + offset + 1,
+              );
+            return [
+              {
+                id: matchup.id ?? index,
+                weeks: weeks.filter((w) => w <= finalWeek),
+                homeId: homeId!,
+                awayId: awayId!,
+              },
+            ];
+          }),
+        }
+      : {}),
     ...(regularEnd > 0 && regularEnd < finalWeek
       ? { playoffStartWeek: regularEnd + 1 }
       : {}),

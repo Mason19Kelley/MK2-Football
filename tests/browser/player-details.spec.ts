@@ -20,9 +20,9 @@ for (const mobile of [false, true]) {
     await expect(
       dialog.getByRole('heading', { name: 'Weekly projections' }),
     ).toBeVisible();
-    await expect(dialog.locator('tbody tr')).toHaveCount(18);
+    await expect(dialog.locator('tbody tr')).toHaveCount(17);
     await expect(dialog.locator('tbody tr').first()).toContainText('Week 1');
-    await expect(dialog.locator('tbody tr').last()).toContainText('Week 18');
+    await expect(dialog.locator('tbody tr').last()).toContainText('Week 17');
     await expect(dialog).toContainText('Injury status');
     await expect(dialog).toContainText('Bye week');
     await expect(dialog).toContainText('Sample weekly projections');

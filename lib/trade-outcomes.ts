@@ -1,4 +1,4 @@
-import { League } from './types';
+import { League, fantasyFinalWeek } from './types';
 import { TradeEvaluation, TradeHorizon, horizonWeeks } from './weekly-trades';
 
 export type TradeObjective = 'points' | 'wins' | 'title';
@@ -46,7 +46,7 @@ export function validateOutcomeSchedule(
       playoffs.startWeek +
         Math.ceil(Math.log2(playoffs.teams)) * playoffs.roundWeeks -
         1 >
-        league.finalWeek
+        fantasyFinalWeek(league)
     )
       throw new Error(
         'Configure a supported future playoff bracket: 2, 4, 6 or 8 teams, equal round lengths, and enough remaining weeks.',
@@ -60,8 +60,8 @@ export function validateOutcomeSchedule(
     objective === 'title'
       ? playoffs!.startWeek - 1
       : Math.min(
-          league.finalWeek,
-          (league.playoffStartWeek ?? league.finalWeek + 1) - 1,
+          fantasyFinalWeek(league),
+          (league.playoffStartWeek ?? fantasyFinalWeek(league) + 1) - 1,
         );
   const weeks = horizonWeeks(league, horizon).filter((w) => w <= end);
   if (!weeks.length)
@@ -128,8 +128,8 @@ export function evaluateLeagueOutcomes(
     objective === 'title'
       ? playoffs!.startWeek - 1
       : Math.min(
-          league.finalWeek,
-          (league.playoffStartWeek ?? league.finalWeek + 1) - 1,
+          fantasyFinalWeek(league),
+          (league.playoffStartWeek ?? fantasyFinalWeek(league) + 1) - 1,
         );
   const weeks = horizonWeeks(league, horizon).filter((w) => w <= end);
   const matchups = league.matchups!.filter((m) =>

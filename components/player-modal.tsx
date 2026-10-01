@@ -2,7 +2,13 @@
 
 import { useEffect, useRef } from 'react';
 import { ExternalLink, X } from 'lucide-react';
-import { League, Player, points, slotNames } from '@/lib/types';
+import {
+  League,
+  Player,
+  points,
+  slotNames,
+  fantasyFinalWeek,
+} from '@/lib/types';
 import Avatar from './player-avatar';
 
 export default function PlayerModal({
@@ -30,7 +36,7 @@ export default function PlayerModal({
     };
   }, []);
   const weeks = Array.from(
-    { length: Math.max(18, league.finalWeek) },
+    { length: fantasyFinalWeek(league) },
     (_, i) => i + 1,
   );
   const projections = { ...player.weeklyProjections };

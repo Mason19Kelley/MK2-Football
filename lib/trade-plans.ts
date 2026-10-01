@@ -86,7 +86,25 @@ export function rosterMoveCandidates(
     ((players: Player[]) => optimalLineup(players, league.slots));
   function add(pickup?: Player) {
     options.signal?.throwIfAborted();
-    const required = Math.max(0, excess + Number(Boolean(pickup)));
+    const added = pickup ? [...roster, pickup] : roster;
+    const positionExcess =
+      pickup && legal(roster)
+        ? Object.entries(league.positionLimits ?? {}).reduce(
+            (sum, [position, limit]) =>
+              sum +
+              Math.max(
+                0,
+                added.filter((p) => p.slotId !== 21 && p.position === position)
+                  .length - limit!,
+              ),
+            0,
+          )
+        : 0;
+    const required = Math.max(
+      0,
+      excess + Number(Boolean(pickup)),
+      positionExcess,
+    );
     const drops: Player[][] =
       required === 0
         ? [[]]

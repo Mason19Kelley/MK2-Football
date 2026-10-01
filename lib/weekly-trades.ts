@@ -1,4 +1,4 @@
-import { League, Player } from './types';
+import { League, Player, fantasyFinalWeek } from './types';
 import { optimalLineup } from './trades';
 
 export type TradeHorizon = 'ros' | 'remaining' | 'next3' | 'playoffs';
@@ -28,7 +28,7 @@ export function horizonWeeks(league: League, horizon: TradeHorizon) {
     horizon === 'playoffs' &&
     (!Number.isInteger(league.playoffStartWeek) ||
       league.playoffStartWeek! < 1 ||
-      league.playoffStartWeek! > league.finalWeek)
+      league.playoffStartWeek! > fantasyFinalWeek(league))
   )
     throw new Error('Choose a playoff start week to compare playoff gains.');
   const start = Math.max(
@@ -37,8 +37,8 @@ export function horizonWeeks(league: League, horizon: TradeHorizon) {
   );
   const end =
     horizon === 'next3'
-      ? Math.min(league.finalWeek, league.week + 2)
-      : league.finalWeek;
+      ? Math.min(fantasyFinalWeek(league), league.week + 2)
+      : fantasyFinalWeek(league);
   return Array.from(
     { length: Math.max(0, end - start + 1) },
     (_, i) => start + i,
@@ -47,6 +47,8 @@ export function horizonWeeks(league: League, horizon: TradeHorizon) {
 // Never infer an entire season of missed games from today's injury flag.
 // IR remains unavailable until the manager updates/syncs the roster.
 export function playerWeek(p: Player, league: League, week: number) {
+  if (week > fantasyFinalWeek(league))
+    return { points: 0, estimated: false, unavailable: true };
   const unavailable =
     p.byeWeek === week ||
     p.slotId === 21 ||
@@ -62,7 +64,7 @@ export function playerWeek(p: Player, league: League, week: number) {
       unavailable: false,
     };
   const weeks = Array.from(
-    { length: Math.max(0, league.finalWeek - league.week + 1) },
+    { length: Math.max(0, fantasyFinalWeek(league) - league.week + 1) },
     (_, i) => league.week + i,
   );
   const forecasts: Record<number, number> = {
