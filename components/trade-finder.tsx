@@ -24,11 +24,13 @@ export function TradeFinder({
   league,
   myTeamId,
   horizon,
+  playoffWeekOverride = '',
   onReview,
 }: {
   league: League;
   myTeamId: number;
   horizon: TradeHorizon;
+  playoffWeekOverride?: string;
   onReview: (trade: TradeCandidate) => void;
 }) {
   const [partnerId, setPartnerId] = useState('all');
@@ -61,18 +63,23 @@ export function TradeFinder({
     evaluatedRosters: 0,
   });
   const [error, setError] = useState('');
+  const [searchLeague, setSearchLeague] = useState<League | null>(null);
+  const resultLeague = searchLeague ?? league;
   const controller = useRef<AbortController | null>(null);
   useEffect(() => {
     controller.current?.abort();
     controller.current = null;
     setRunning(false);
     setResult(null);
+    setSearchLeague(null);
     setError('');
     return () => {
       controller.current?.abort();
     };
   }, [
-    league,
+    league.id,
+    league.season,
+    league.source,
     myTeamId,
     partnerId,
     tradeSize,
@@ -80,6 +87,7 @@ export function TradeFinder({
     minimumGain,
     ranking,
     horizon,
+    playoffWeekOverride,
     waiverBaseline,
     paretoOnly,
     scenarioEnabled,
@@ -91,7 +99,7 @@ export function TradeFinder({
   ]);
   useEffect(() => {
     setPartnerId('all');
-  }, [league, myTeamId]);
+  }, [league.id, league.season, league.source, myTeamId]);
 
   async function search(e: React.FormEvent) {
     e.preventDefault();
@@ -100,6 +108,7 @@ export function TradeFinder({
     controller.current = current;
     setRunning(true);
     setResult(null);
+    setSearchLeague(league);
     setError('');
     setChecked(0);
     setProgress({ phase: 'preparing', evaluatedRosters: 0 });
@@ -124,6 +133,7 @@ export function TradeFinder({
         ranking,
         signal: current.signal,
         onProgress: (count, next) => {
+          if (current.signal.aborted) return;
           setChecked(count);
           if (next) setProgress(next);
         },
@@ -522,6 +532,13 @@ export function TradeFinder({
             ? `Showing ${result.candidates.length} of ${result.matched.toLocaleString()} improving trades (${result.checked.toLocaleString()} checked).`
             : `No trades met these criteria (${result.checked.toLocaleString()} checked). Try a lower minimum gain, more teams, another period, or a different trade size.`)}
       </div>
+      {searchLeague && searchLeague !== league && (running || result) && (
+        <p className="finder-note">
+          New league data is available.{' '}
+          {running ? 'This search uses' : 'These results use'} the data from
+          when the search started. Run Find trades again to use the latest data.
+        </p>
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -564,7 +581,7 @@ export function TradeFinder({
       )}
       <div className="finder-results">
         {result?.candidates.map((t) => {
-          const partner = league.teams.find((p) => p.id === t.partnerId)!;
+          const partner = resultLeague.teams.find((p) => p.id === t.partnerId)!;
           return (
             <article
               className="finder-card"
@@ -683,10 +700,10 @@ export function TradeFinder({
               {horizon !== 'ros' ? (
                 <LineupDetails>
                   <TradeWeeklyComparison
-                    league={league}
+                    league={resultLeague}
                     before={
                       t.baseline?.mine.roster ??
-                      league.teams.find((p) => p.id === myTeamId)!.players
+                      resultLeague.teams.find((p) => p.id === myTeamId)!.players
                     }
                     after={t.plan.mine.roster}
                     scenarios={t.scenarios}
@@ -694,7 +711,7 @@ export function TradeFinder({
                     name="Your team"
                   />
                   <TradeWeeklyComparison
-                    league={league}
+                    league={resultLeague}
                     before={t.baseline?.partner.roster ?? partner.players}
                     after={t.plan.partner.roster}
                     scenarios={t.scenarios}

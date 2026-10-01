@@ -213,6 +213,7 @@ export async function findTrades(
     Map<number, ReturnType<typeof playerWeek>>
   >();
   const replacementCache = new Map<number, Player[]>();
+  const specialistCache = new Map<number, Player[]>();
   let phase: TradeSearchProgress['phase'] = 'preparing';
   let evaluatedRosters = 0;
   let checked = 0;
@@ -239,12 +240,14 @@ export async function findTrades(
             period,
             projectionCache,
             replacementCache,
+            { specialistCache },
           )
         : evaluateForecastRoster(league, roster, period, {
             scenarios: options.scenarios,
             streaming: !waiverBaseline && !options.scenarios,
             projectionCache,
             replacementCache,
+            specialistCache,
           });
     evaluatedRosters++;
     if (Date.now() - reportedAt >= 100) {

@@ -110,7 +110,11 @@ export function evaluateRoster(
   horizon: TradeHorizon,
   projectionCache?: Map<number, Map<number, ReturnType<typeof playerWeek>>>,
   replacementCache?: Map<number, Player[]>,
-  options: { streaming?: boolean; streamSpecialists?: boolean } = {},
+  options: {
+    streaming?: boolean;
+    streamSpecialists?: boolean;
+    specialistCache?: Map<number, Player[]>;
+  } = {},
 ): TradeEvaluation {
   const base = optimalLineup(roster, league.slots);
   if (horizon === 'ros') return { ...base, weeks: [] };
@@ -146,7 +150,12 @@ export function evaluateRoster(
     const specialists =
       options.streamSpecialists === false
         ? []
-        : specialistStreamingCandidates(league, roster, week);
+        : specialistStreamingCandidates(
+            league,
+            roster,
+            week,
+            options.specialistCache,
+          );
     let lineup = optimalLineup(
       [
         ...values.map(({ p, value }) => projectedPlayer(p, value)),
@@ -255,18 +264,22 @@ export function specialistStreamingCandidates(
   league: League,
   roster: Player[],
   week: number,
+  cache?: Map<number, Player[]>,
 ): Player[] {
-  const owned = new Set(roster.map((p) => p.id));
-  return weeklyReplacementCandidates(league, week, true)
-    .filter(
-      (p) => (p.position === 'K' || p.position === 'D/ST') && !owned.has(p.id),
-    )
-    .map((p) => ({
+  // Cache only the league-wide pool. A post-trade pickup can already be owned
+  // by this roster, so ownership filtering must still happen on every call.
+  let candidates = cache?.get(week);
+  if (!candidates) {
+    candidates = weeklyReplacementCandidates(league, week, true).map((p) => ({
       ...p,
       eligibleSlots: p.eligibleSlots.filter(
         (slot) => slot === 16 || slot === 17,
       ),
     }));
+    cache?.set(week, candidates);
+  }
+  const owned = new Set(roster.map((p) => p.id));
+  return candidates.filter((p) => !owned.has(p.id));
 }
 
 // Players with the same starting eligibility are interchangeable for a single

@@ -2,7 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { demoLeague } from '../lib/demo';
 import { Player, League } from '../lib/types';
-import { evaluateRoster, horizonWeeks, playerWeek } from '../lib/weekly-trades';
+import {
+  evaluateRoster,
+  horizonWeeks,
+  playerWeek,
+  specialistStreamingCandidates,
+} from '../lib/weekly-trades';
+import {
+  evaluateForecastRoster,
+  defaultScenarioSettings,
+} from '../lib/trade-evaluation';
 import { findTrades } from '../lib/trade-finder';
 import { normalizeLeague, enrichByeWeeks, ESPNResponse } from '../lib/espn';
 import { normalizeWaiverPlayers } from '../lib/waivers';
@@ -34,6 +43,97 @@ function l(): League {
     waiverWire: undefined,
   };
 }
+
+test('cached specialist pools avoid rescanning and exclude pickups already owned by each roster', () => {
+  const specialist = {
+    ...p(9001, [12, 13, 14, 15], [17]),
+    position: 'K' as const,
+    availability: 'FREEAGENT' as const,
+    percentOwned: null,
+  };
+  const league = {
+    ...l(),
+    slots: [{ id: 17, label: 'K', count: 1 }],
+    waiverWire: { syncedAt: '', truncated: false, players: [specialist] },
+  };
+  let reads = 0;
+  Object.defineProperty(league.waiverWire, 'players', {
+    get: () => {
+      reads++;
+      return [specialist];
+    },
+  });
+  const cache = new Map<number, Player[]>();
+  const initial = specialistStreamingCandidates(league, [], 1, cache);
+  assert.equal(initial[0].weekly, 12);
+  const scanned = reads;
+  assert.deepEqual(
+    specialistStreamingCandidates(league, [specialist], 1, cache),
+    [],
+  );
+  assert.deepEqual(
+    specialistStreamingCandidates(league, [], 1, cache),
+    initial,
+  );
+  assert.equal(reads, scanned);
+  assert.equal(
+    specialistStreamingCandidates(league, [], 2, cache)[0].weekly,
+    13,
+  );
+  assert.ok(reads > scanned);
+});
+
+test('specialist caching preserves deterministic, bounded and sampled roster evaluations', () => {
+  const kicker = {
+    ...p(9001, [12, 13, 14, 15], [17]),
+    position: 'K' as const,
+    availability: 'FREEAGENT' as const,
+    percentOwned: null,
+  };
+  const league = {
+    ...l(),
+    slots: [...l().slots, { id: 17, label: 'K', count: 1 }],
+    waiverWire: { syncedAt: '', truncated: false, players: [kicker] },
+  };
+  const cache = new Map<number, Player[]>();
+  const rosters = [[p(1, [20, 21, 22, 23])], [p(2, [15, 16, 17, 18]), kicker]];
+  for (const roster of rosters) {
+    assert.deepEqual(
+      evaluateRoster(league, roster, 'remaining', undefined, undefined, {
+        specialistCache: cache,
+      }),
+      evaluateRoster(league, roster, 'remaining'),
+    );
+    const scenarios = { ...defaultScenarioSettings, samples: 8 };
+    assert.deepEqual(
+      evaluateForecastRoster(league, roster, 'remaining', {
+        scenarios,
+        specialistCache: cache,
+      }),
+      evaluateForecastRoster(league, roster, 'remaining', { scenarios }),
+    );
+  }
+  const bounded = {
+    ...p(3, [20, 21, 22, 23]),
+    weekly: null,
+    ros: null,
+    weeklyProjections: {},
+    projectionBounds: {
+      weekly: {
+        1: { lower: 5, upper: 10 },
+        2: { lower: 5, upper: 10 },
+        3: { lower: 5, upper: 10 },
+        4: { lower: 5, upper: 10 },
+      },
+    },
+  };
+  assert.deepEqual(
+    evaluateForecastRoster(league, [bounded], 'remaining', {
+      specialistCache: cache,
+    }),
+    evaluateForecastRoster(league, [bounded], 'remaining'),
+  );
+});
 test('weekly optimizer rotates starters around byes and beats a static season-total lineup', () => {
   const roster = [
     { ...p(1, [30, 0, 10, 10]), byeWeek: 2 },

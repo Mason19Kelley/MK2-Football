@@ -124,6 +124,7 @@ export function evaluateForecastRoster(
     scenarios?: ScenarioSettings;
     projectionCache?: Map<number, Map<number, ReturnType<typeof playerWeek>>>;
     replacementCache?: Map<number, Player[]>;
+    specialistCache?: Map<number, Player[]>;
   } = {},
 ): TradeEvaluation {
   // Players with no starting-slot eligibility cannot affect any lineup.
@@ -147,6 +148,7 @@ export function evaluateForecastRoster(
     {
       streaming: options.streaming ?? false,
       streamSpecialists: options.streamSpecialists,
+      specialistCache: options.specialistCache,
     },
   );
   // Identical bounds require one assignment per week, not two.
@@ -160,6 +162,7 @@ export function evaluateForecastRoster(
         {
           streaming: options.streaming ?? false,
           streamSpecialists: options.streamSpecialists,
+          specialistCache: options.specialistCache,
         },
       )
     : base;
@@ -206,7 +209,12 @@ export function evaluateForecastRoster(
     const candidates =
       options.streamSpecialists === false
         ? []
-        : specialistStreamingCandidates(league, lower, week);
+        : specialistStreamingCandidates(
+            league,
+            lower,
+            week,
+            options.specialistCache,
+          );
     const weeklyRoster = [...lower, ...candidates];
     for (let sample = 0; sample < settings.samples; sample++) {
       const forecast = weeklyRoster.map((p) => {

@@ -1483,6 +1483,7 @@ export default function Dashboard() {
               <TradeFinder
                 league={tradeLeague}
                 horizon={tradeHorizon}
+                playoffWeekOverride={playoffWeek}
                 myTeamId={myTeamId}
                 onReview={(candidate) => {
                   setReviewPolicy({
