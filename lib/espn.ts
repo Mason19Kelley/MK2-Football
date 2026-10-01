@@ -1,4 +1,5 @@
 import { playerRosForecast, refreshPlayerRos } from './weekly-forecasts';
+import type { BacktestStarter, BacktestTeamWeek } from './backtest';
 import {
   League,
   Player,
@@ -428,8 +429,12 @@ export function normalizeLeague(raw: ESPNResponse, season: number): League {
           playoffRules: {
             seeding: schedule.playoffSeedingRule ?? 'UNKNOWN',
             matchupTie: raw.settings?.scoringSettings?.matchupTieRule ?? 'NONE',
+            // ESPN reports its default playoff tiebreaker (higher seed advances) as NONE.
             playoffTie:
-              raw.settings?.scoringSettings?.playoffMatchupTieRule ?? 'UNKNOWN',
+              raw.settings?.scoringSettings?.playoffMatchupTieRule === 'NONE'
+                ? 'HIGHER_SEED'
+                : (raw.settings?.scoringSettings?.playoffMatchupTieRule ??
+                  'UNKNOWN'),
             divisionWinners: (schedule.divisions?.length ?? 0) > 1,
             reseed: schedule.playoffReseed ?? false,
             ...(raw.settings?.scoringSettings?.scoringEnhancementType &&
@@ -648,3 +653,103 @@ export async function enrichLiveGames(league: League): Promise<void> {
 }
 
 export { refreshPlayerRos };
+
+type RawBoxscoreSide = {
+  teamId?: number;
+  rosterForCurrentScoringPeriod?: {
+    entries?: {
+      lineupSlotId: number;
+      playerPoolEntry?: { appliedStatTotal?: number; player?: RawPlayer };
+    }[];
+  };
+};
+export type ESPNBoxscoreResponse = {
+  schedule?: { home?: RawBoxscoreSide; away?: RawBoxscoreSide }[];
+};
+
+// Starters for one completed scoring period with the projection ESPN held for
+// that week. Team-weeks with an unprojected starter are skipped, not guessed.
+export function parseBacktestWeek(
+  raw: ESPNBoxscoreResponse,
+  season: number,
+  week: number,
+): { teamWeeks: BacktestTeamWeek[]; skipped: number } {
+  const teamWeeks: BacktestTeamWeek[] = [];
+  let skipped = 0;
+  for (const matchup of raw.schedule ?? []) {
+    for (const side of [matchup.home, matchup.away]) {
+      const entries = side?.rosterForCurrentScoringPeriod?.entries;
+      if (!side || !Number.isInteger(side.teamId) || !entries?.length) continue;
+      const starters: BacktestStarter[] = [];
+      let complete = true;
+      for (const entry of entries) {
+        const p = entry.playerPoolEntry?.player;
+        if (
+          !p ||
+          [20, 21, 25].includes(entry.lineupSlotId) ||
+          isIDPSlot(entry.lineupSlotId) ||
+          !isSupportedPlayer(p)
+        )
+          continue;
+        const stat = (source: number) =>
+          finite(
+            p.stats?.find(
+              (s) =>
+                s.seasonId === season &&
+                s.statSourceId === source &&
+                s.statSplitTypeId === 1 &&
+                s.scoringPeriodId === week,
+            )?.appliedTotal,
+          );
+        const projection = stat(1);
+        if (projection === null) {
+          complete = false;
+          break;
+        }
+        starters.push({
+          id: p.id,
+          position: pos[p.defaultPositionId!]!,
+          nflTeam: nfl[p.proTeamId ?? 0] ?? 'FA',
+          projection,
+          // Inactive starters have no stat line and scored zero.
+          actual:
+            stat(0) ?? finite(entry.playerPoolEntry?.appliedStatTotal) ?? 0,
+        });
+      }
+      if (complete && starters.length)
+        teamWeeks.push({ week, teamId: side.teamId!, starters });
+      else skipped++;
+    }
+  }
+  return { teamWeeks, skipped };
+}
+
+export async function fetchBacktestWeek(
+  leagueUrl: URL,
+  headers: Record<string, string>,
+  season: number,
+  week: number,
+) {
+  const url = new URL(leagueUrl);
+  url.searchParams.delete('view');
+  for (const view of ['mMatchupScore', 'mScoreboard', 'mBoxscore'])
+    url.searchParams.append('view', view);
+  url.searchParams.set('scoringPeriodId', String(week));
+  const response = await fetch(url, {
+    headers,
+    cache: 'no-store',
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok)
+    throw Object.assign(
+      new Error(
+        `Week ${week} box scores unavailable (HTTP ${response.status}).`,
+      ),
+      { status: response.status },
+    );
+  return parseBacktestWeek(
+    (await response.json()) as ESPNBoxscoreResponse,
+    season,
+    week,
+  );
+}

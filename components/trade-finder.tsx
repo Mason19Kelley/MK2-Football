@@ -20,6 +20,7 @@ import {
 import { PlayoffScenario, TradeObjective } from '@/lib/trade-outcomes';
 import { forecastSnapshot } from '@/lib/forecast-snapshots';
 import { TradeSeasonOddsDisplay } from './trade-season-odds';
+import { ScenarioBacktest } from './scenario-backtest';
 import type {
   TradeSeasonOdds,
   TradeSeasonOddsInput,
@@ -453,7 +454,7 @@ export function TradeFinder({
                   ],
                   [
                     'scoreCv',
-                    'Scoring variation (fraction of points)',
+                    'Scoring variation (× position defaults)',
                     0,
                     2,
                     0.01,
@@ -493,12 +494,13 @@ export function TradeFinder({
               ))}
             </div>
             <p className="finder-note">
-              These are editable assumptions, not historically calibrated
-              probabilities. Availability draws are independent by week; role
+              These are editable assumptions; check them against your league’s
+              past weeks below. Availability draws are independent by week; role
               changes persist across the horizon. Lineups use availability and
               role information before scoring noise is drawn. IR return
               scenarios require room to activate the player.
             </p>
+            <ScenarioBacktest league={league} settings={scenarioSettings} />
           </>
         )}
         {objective === 'title' && (

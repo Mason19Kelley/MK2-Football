@@ -3614,6 +3614,16 @@ h1 {
 .trade-season-odds h3 {
   margin: 8px 0 18px;
 }
+.scenario-backtest {
+  padding: 24px;
+  margin: 8px 0 24px;
+}
+.scenario-backtest h3 {
+  margin: 8px 0 12px;
+}
+.scenario-backtest .button {
+  margin-bottom: 16px;
+}
 .trade-odds-table-wrap {
   overflow-x: auto;
 }

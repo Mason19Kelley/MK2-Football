@@ -9,6 +9,9 @@ test-results/
 # Local ESPN trade datasets
 /data/trade-history/
 
+# Cached ESPN box scores for scoring backtests
+/data/backtest/
+
 # Encrypted ESPN connections and local encryption key
 /data/espn-connections/
 

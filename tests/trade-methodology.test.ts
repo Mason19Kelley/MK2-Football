@@ -16,6 +16,8 @@ import {
 import {
   evaluateForecastRoster,
   defaultScenarioSettings,
+  lognormalScore,
+  scoreStdDev,
   summarizeGains,
 } from '../lib/trade-evaluation';
 import {
@@ -744,4 +746,52 @@ test('manual evaluation with a 4000-player wire finishes a single package and re
   assert.equal(result.candidates.length, 1);
   assert.ok(phases.includes('preparing'));
   assert.ok(phases.includes('searching'));
+});
+
+test('weekly scoring spread is position-specific and wider for low forecasts', () => {
+  const cv = (pos: Parameters<typeof scoreStdDev>[0], points: number) =>
+    scoreStdDev(pos, points, 1) / points;
+  assert.ok(Math.abs(cv('QB', 18) - 0.4) < 0.02);
+  assert.ok(Math.abs(cv('RB', 13) - 0.55) < 0.02);
+  assert.ok(Math.abs(cv('WR', 13) - 0.6) < 0.02);
+  assert.ok(Math.abs(cv('TE', 9) - 0.65) < 0.02);
+  assert.ok(Math.abs(cv('K', 8) - 0.5) < 0.02);
+  assert.ok(Math.abs(cv('D/ST', 7) - 0.8) < 0.02);
+  for (const pos of ['QB', 'RB', 'WR', 'TE'] as const) {
+    assert.ok(cv(pos, 5) >= 0.8 && cv(pos, 5) <= 1);
+  }
+  assert.equal(scoreStdDev('WR', 13, 0), 0);
+});
+
+test('lognormal weekly scores keep the forecast mean and spread without negative weeks', () => {
+  const draws = 20000;
+  for (const [pos, mean] of [
+    ['WR', 13],
+    ['RB', 4],
+    ['D/ST', 6],
+  ] as const) {
+    const sd = scoreStdDev(pos, mean, 1);
+    const scores = Array.from({ length: draws }, (_, i) => {
+      // Normal quantiles via a stable inverse-erf approximation.
+      const u = (i + 0.5) / draws;
+      const t = Math.sqrt(-2 * Math.log(Math.min(u, 1 - u)));
+      const z =
+        Math.sign(u - 0.5) *
+        (t -
+          (2.515517 + 0.802853 * t + 0.010328 * t * t) /
+            (1 + 1.432788 * t + 0.189269 * t * t + 0.001308 * t * t * t));
+      return lognormalScore(pos, mean, sd, z);
+    });
+    const avg = scores.reduce((s, n) => s + n, 0) / draws;
+    const spread = Math.sqrt(
+      scores.reduce((s, n) => s + (n - avg) ** 2, 0) / draws,
+    );
+    assert.ok(Math.abs(avg - mean) / mean < 0.02, `${pos} mean ${avg}`);
+    assert.ok(Math.abs(spread - sd) / sd < 0.05, `${pos} sd ${spread}`);
+    assert.ok(Math.min(...scores) >= (pos === 'D/ST' ? -5 : 0));
+    // Right-skewed: the median sits below the mean.
+    const sorted = [...scores].sort((a, b) => a - b);
+    assert.ok(sorted[draws / 2] < mean);
+  }
+  assert.equal(lognormalScore('WR', 10, 0, 2), 10);
 });

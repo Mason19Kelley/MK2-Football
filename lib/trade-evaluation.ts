@@ -1,4 +1,4 @@
-import { League, Player } from './types';
+import { League, Player, Position } from './types';
 import {
   evaluateRoster,
   horizonWeeks,
@@ -22,7 +22,7 @@ export const defaultScenarioSettings: ScenarioSettings = {
   samples: 64,
   seed: 2026,
   availability: 0.95,
-  scoreCv: 0.35,
+  scoreCv: 1,
   roleCv: 0.1,
   teamCorrelation: 0.2,
 };
@@ -49,8 +49,44 @@ export function validateScenarios(s: ScenarioSettings) {
       'Invalid scenario assumptions. Use 8–512 samples, probabilities from 0 to 1, and variation from 0 to 2.',
     );
 }
+// Weekly scoring spread is a fixed amount plus a share of the forecast, so
+// low projections stay relatively more volatile. At a typical starter's
+// forecast this gives CVs of QB 0.40, RB 0.55, WR 0.60, TE 0.65, K 0.50 and
+// D/ST 0.80; a 5-point skill player lands near 0.9. `scoreCv` scales these.
+const scoreSpread: Record<Position, { fixed: number; share: number }> = {
+  QB: { fixed: 3.5, share: 0.2 },
+  RB: { fixed: 2.8, share: 0.33 },
+  WR: { fixed: 2.4, share: 0.42 },
+  TE: { fixed: 2.8, share: 0.34 },
+  K: { fixed: 2, share: 0.25 },
+  'D/ST': { fixed: 3, share: 0.37 },
+};
+// D/ST can score below zero, so its lognormal is drawn on a shifted score.
+const scoreShift: Partial<Record<Position, number>> = { 'D/ST': 5 };
+export function scoreStdDev(
+  position: Position,
+  forecast: number,
+  scale: number,
+) {
+  const { fixed, share } = scoreSpread[position];
+  return scale * (fixed + share * Math.max(0, forecast));
+}
+// Lognormal with the given mean and standard deviation driven by a standard
+// normal draw: no impossible negative weeks and a long tail of big ones.
+export function lognormalScore(
+  position: Position,
+  mean: number,
+  sd: number,
+  z: number,
+) {
+  const shift = scoreShift[position] ?? 0;
+  const center = mean + shift;
+  if (center <= 0 || sd === 0) return mean + sd * z;
+  const s2 = Math.log(1 + (sd / center) ** 2);
+  return center * Math.exp(Math.sqrt(s2) * z - s2 / 2) - shift;
+}
 // Stateless keyed draws give every trade exactly the same player/week scenarios.
-function uniform(key: string) {
+export function uniform(key: string) {
   let h = 2166136261;
   for (let i = 0; i < key.length; i++)
     h = Math.imul(h ^ key.charCodeAt(i), 16777619);
@@ -61,10 +97,37 @@ function uniform(key: string) {
   h ^= h >>> 16;
   return ((h >>> 0) + 0.5) / 4294967296;
 }
-function normal(key: string) {
+export function normal(key: string) {
   return (
     Math.sqrt(-2 * Math.log(uniform(key + ':u'))) *
     Math.cos(2 * Math.PI * uniform(key + ':v'))
+  );
+}
+// Keys match the scenario cache so both paths draw identical scenarios.
+export function roleMultiplier(
+  settings: ScenarioSettings,
+  p: Pick<Player, 'id' | 'roleStdDev'>,
+  sample: number,
+) {
+  return Math.max(
+    0,
+    1 +
+      normal(`${settings.seed}:${sample}:${p.id}:role`) *
+        (p.roleStdDev ?? settings.roleCv),
+  );
+}
+export function scoreNoise(
+  settings: ScenarioSettings,
+  p: Pick<Player, 'id' | 'nflTeam'>,
+  week: number,
+  sample: number,
+) {
+  const key = `${settings.seed}:${sample}:${week}`;
+  const common = normal(`${key}:nfl:${p.nflTeam === 'FA' ? p.id : p.nflTeam}`);
+  const individual = normal(`${key}:score:${p.id}`);
+  return (
+    Math.sqrt(settings.teamCorrelation) * common +
+    Math.sqrt(1 - settings.teamCorrelation) * individual
   );
 }
 export type ScenarioCache = {
@@ -395,10 +458,7 @@ export function evaluateForecastRoster(
           (p.returnWeek === undefined || week >= p.returnWeek) &&
           uniform(`${key}:${week}:availability`) < probability;
         // Role is observed before lineup selection; scoring noise is observed afterwards.
-        const multiplier = Math.max(
-          0,
-          1 + normal(key + ':role') * (p.roleStdDev ?? settings.roleCv),
-        );
+        const multiplier = roleMultiplier(settings, p, sample);
         return {
           ...p,
           slotId: recovered && p.slotId === 21 ? 20 : p.slotId,
@@ -418,26 +478,15 @@ export function evaluateForecastRoster(
         const mean = p.weekly! - banked;
         const noise = scenarioCache
           ? scenarioCache.noise(p, week, sample)
-          : (() => {
-              const key = `${settings.seed}:${sample}:${week}`;
-              const common = normal(
-                `${key}:nfl:${p.nflTeam === 'FA' ? p.id : p.nflTeam}`,
-              );
-              const individual = normal(`${key}:score:${p.id}`);
-              return (
-                Math.sqrt(settings.teamCorrelation) * common +
-                Math.sqrt(1 - settings.teamCorrelation) * individual
-              );
-            })();
-        return (
-          sum +
-          banked +
-          mean +
-          (p.scoreStdDev !== undefined
-            ? p.scoreStdDev * Math.sqrt(game?.remainingFraction ?? 1)
-            : Math.abs(mean) * settings.scoreCv) *
-            noise
-        );
+          : scoreNoise(settings, p, week, sample);
+        // Live games draw only the unplayed portion; its spread is the
+        // full-game spread scaled by the square root of the time remaining.
+        const remaining = game?.remainingFraction ?? 1;
+        const sd =
+          (p.scoreStdDev ??
+            scoreStdDev(p.position, mean / remaining, settings.scoreCv)) *
+          Math.sqrt(remaining);
+        return sum + banked + lognormalScore(p.position, mean, sd, noise);
       }, 0);
       scenarioWeeks[week].push(score);
       scenarioTotals[sample] += score;

@@ -291,6 +291,25 @@ test('import preserves division, seeding, tie rules, historical results and uneq
   assert.equal(l.matchups![0].homeActuals![1], 50);
 });
 
+test('import treats ESPN NONE playoff tie rule as the higher-seed default', () => {
+  const l = normalizeLeague(
+    {
+      id: 1,
+      scoringPeriodId: 2,
+      teams: [{ id: 1 }],
+      settings: {
+        scheduleSettings: { matchupPeriodCount: 1, playoffTeamCount: 4 },
+        scoringSettings: {
+          matchupTieRule: 'NONE',
+          playoffMatchupTieRule: 'NONE',
+        },
+      },
+    },
+    2026,
+  );
+  assert.equal(l.playoffRules?.playoffTie, 'HIGHER_SEED');
+});
+
 test('division winners qualify ahead of stronger wildcards', () => {
   const l = league();
   l.playoffRules = { ...rules, divisionWinners: true };

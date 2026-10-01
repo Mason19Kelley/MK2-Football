@@ -134,3 +134,114 @@ test('saved ESPN connections refresh securely, expire, and disconnect', async (t
   assert.equal(await loadConnection(corrupt), null);
   assert.equal(await loadConnection('../../etc/passwd'), null);
 });
+
+test('backtest box scores use the saved connection only for its own league', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'espn-backtest-'));
+  process.env.ESPN_CONNECTION_DIR = directory;
+  t.after(async () => {
+    delete process.env.ESPN_CONNECTION_DIR;
+    await rm(directory, { recursive: true, force: true });
+  });
+  const token = await saveConnection({
+    leagueId: '42',
+    season: 2025,
+    espnS2: 'secret-session',
+    swid: 'secret-owner',
+  });
+  const requested: { week: string | null; cookie?: string }[] = [];
+  let upstreamStatus = 200;
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async (input: URL | string, init: RequestInit) => {
+      const url = new URL(String(input));
+      requested.push({
+        week: url.searchParams.get('scoringPeriodId'),
+        cookie: (init.headers as Record<string, string>).Cookie,
+      });
+      if (upstreamStatus !== 200)
+        return new Response('', { status: upstreamStatus });
+      const week = Number(url.searchParams.get('scoringPeriodId'));
+      const stat = (statSourceId: number, appliedTotal: number) => ({
+        seasonId: 2025,
+        statSourceId,
+        statSplitTypeId: 1,
+        scoringPeriodId: week,
+        appliedTotal,
+      });
+      return Response.json({
+        schedule: [
+          {
+            home: {
+              teamId: 1,
+              rosterForCurrentScoringPeriod: {
+                entries: [
+                  {
+                    lineupSlotId: 0,
+                    playerPoolEntry: {
+                      player: {
+                        id: 7,
+                        defaultPositionId: 1,
+                        proTeamId: 12,
+                        stats: [stat(1, 20), stat(0, 10 + week)],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      });
+    },
+  );
+  const { POST: backtest } = await import('../app/api/espn/backtest/route');
+  const request = (body: unknown, origin = 'http://localhost:3000') =>
+    new NextRequest('http://localhost:3000/api/espn/backtest', {
+      method: 'POST',
+      headers: {
+        Origin: origin,
+        'Content-Type': 'application/json',
+        Cookie: `${CONNECTION_COOKIE}=${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+  const response = await backtest(
+    request({ leagueId: '42', season: 2025, weeks: [1, 2, 3] }),
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.weeks[3].teamWeeks[0].starters[0].actual, 13);
+  assert.deepEqual(requested.map((r) => r.week).sort(), ['1', '2', '3']);
+  assert.ok(
+    requested.every(
+      (r) => r.cookie === 'espn_s2=secret-session; SWID=secret-owner',
+    ),
+  );
+  requested.length = 0;
+  // Another league never receives the saved cookies.
+  await backtest(request({ leagueId: '43', season: 2025, weeks: [1] }));
+  assert.equal(requested[0].cookie, undefined);
+  for (const weeks of [[], [0], [1, 1], [19], 'all'])
+    assert.equal(
+      (await backtest(request({ leagueId: '42', season: 2025, weeks }))).status,
+      400,
+    );
+  assert.equal(
+    (
+      await backtest(
+        request(
+          { leagueId: '42', season: 2025, weeks: [1] },
+          'https://other.example',
+        ),
+      )
+    ).status,
+    403,
+  );
+  upstreamStatus = 401;
+  const denied = await backtest(
+    request({ leagueId: '42', season: 2025, weeks: [1] }),
+  );
+  assert.equal(denied.status, 401);
+  assert.equal((await denied.json()).reconnect, true);
+});
