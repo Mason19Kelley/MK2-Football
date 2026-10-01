@@ -3406,3 +3406,77 @@ h1 {
     height: 26px;
   }
 }
+
+.team-forecast {
+  margin-bottom: 24px;
+}
+.team-forecast-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 0 22px 20px;
+}
+.team-forecast-grid .stat-card {
+  background: var(--background, #faf8f5);
+}
+.team-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 24px;
+}
+.team-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 4px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.team-tabs button[aria-selected='true'] {
+  color: var(--accent, #805332);
+  border-bottom-color: currentColor;
+  font-weight: 600;
+}
+.schedule-table {
+  min-width: 680px;
+}
+.win-chance-track {
+  display: block;
+  width: 86px;
+  height: 4px;
+  margin: 8px 0 0 auto;
+  border-radius: 4px;
+  background: #eee8e2;
+  overflow: hidden;
+}
+.win-chance-track > span {
+  display: block;
+  height: 100%;
+  background: #805332;
+  border-radius: inherit;
+}
+.schedule-empty {
+  padding: 12px 24px 28px;
+  color: var(--muted);
+}
+.schedule-postseason {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 22px;
+  border-top: 1px solid var(--line);
+}
+.schedule-postseason p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+@media (max-width: 700px) {
+  .team-forecast-grid {
+    grid-template-columns: 1fr;
+    padding: 0 16px 16px;
+    gap: 10px;
+  }
+}

@@ -164,6 +164,8 @@ export default function Dashboard() {
     [viewedId, setViewedId] = useState(1),
     [view, setView] = useState<View>('roster'),
     [ready, setReady] = useState(false);
+  const forecast = useSeasonForecast(league);
+  const [teamTab, setTeamTab] = useState<'overview' | 'schedule'>('overview');
   const [modal, setModal] = useState<Modal>(null),
     [query, setQuery] = useState(''),
     [position, setPosition] = useState('All'),
@@ -712,7 +714,7 @@ export default function Dashboard() {
             onClick={() => navigate('roster')}
           >
             <LayoutDashboard size={19} />
-            My roster
+            Team overview
             <span className="nav-dot" />
           </button>
           <button
@@ -821,7 +823,7 @@ export default function Dashboard() {
             <ChevronRight size={13} />
             <span>
               {view === 'roster'
-                ? 'Roster overview'
+                ? 'Team overview'
                 : view === 'league'
                   ? 'League rosters'
                   : view === 'players'
@@ -854,9 +856,7 @@ export default function Dashboard() {
               </div>
               <h1>
                 {view === 'roster'
-                  ? team.id === myTeamId
-                    ? 'My roster'
-                    : 'Team roster'
+                  ? 'Team overview'
                   : view === 'league'
                     ? 'The whole league.'
                     : view === 'players'
@@ -1033,312 +1033,366 @@ export default function Dashboard() {
                   detail={<>{points(team.pointsFor)} points scored</>}
                 />
               </div>
-              <div className="roster-layout">
-                <section className="panel roster-panel">
-                  <div className="panel-heading">
-                    <div>
-                      <h3>
-                        The lineup
-                        <span className="count-chip">
-                          {team.players.length}
-                        </span>
-                      </h3>
-                      <p>A closer look at your roster.</p>
-                    </div>
-                    <div className="segmented" aria-label="Projection period">
-                      <button
-                        className={metric === 'weekly' ? 'current' : ''}
-                        onClick={() => setMetric('weekly')}
-                      >
-                        This week
-                      </button>
-                      <button
-                        className={metric === 'ros' ? 'current' : ''}
-                        onClick={() => setMetric('ros')}
-                      >
-                        Rest of season
-                      </button>
-                    </div>
-                  </div>
-                  <div className="table-toolbar">
-                    <div className="search-field">
-                      <Search size={15} />
-                      <input
-                        aria-label="Search players"
-                        placeholder="Search players..."
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                      />
-                      {query && (
-                        <button
-                          aria-label="Clear search"
-                          onClick={() => setQuery('')}
-                        >
-                          <X size={14} />
-                        </button>
-                      )}
-                    </div>
-                    <select
-                      aria-label="Roster filter"
-                      value={rosterFilter}
-                      onChange={(e) => setRosterFilter(e.target.value)}
-                    >
-                      <option>All players</option>
-                      <option>Starters</option>
-                      <option>Bench & IR</option>
-                    </select>
-                    <button
-                      className="icon-button export-button"
-                      aria-label="Export roster CSV"
-                      title="Export roster CSV"
-                      onClick={exportRoster}
-                    >
-                      <Download size={17} />
-                    </button>
-                  </div>
-                  <div className="position-tabs" aria-label="Position filter">
-                    {['All', ...positions].map((p) => (
-                      <button
-                        key={p}
-                        className={position === p ? 'active' : ''}
-                        onClick={() => setPosition(p)}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="table-scroll">
-                    <table className="roster-table">
-                      <thead>
-                        <tr>
-                          <th>SLOT</th>
-                          <th>
-                            <button
-                              onClick={() =>
-                                setSort(sort === 'name' ? 'lineup' : 'name')
-                              }
-                            >
-                              PLAYER
-                              <ArrowDownUp size={11} />
-                            </button>
-                          </th>
-                          <th className="status-col">STATUS</th>
-                          <th className="number">
-                            <button
-                              onClick={() =>
-                                setSort(
-                                  sort === 'projection'
-                                    ? 'lineup'
-                                    : 'projection',
-                                )
-                              }
-                            >
-                              {metric === 'weekly'
-                                ? 'WK ' + league.week + ' PROJ.'
-                                : 'ROS PROJ.'}
-                              <ArrowDownUp size={11} />
-                            </button>
-                          </th>
-                          <th className="number season-col">SEASON PTS</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayed.map((p) => (
-                          <tr
-                            key={p.id}
-                            className={!active(p) ? 'bench-row' : ''}
-                          >
-                            <td>
-                              <span
-                                className={`slot-badge ${active(p) ? '' : 'bench'}`}
-                              >
-                                {p.slot}
-                              </span>
-                            </td>
-                            <td>
-                              <div className="player-cell">
-                                <Avatar player={p} />
-                                <div>
-                                  <strong>{p.name}</strong>
-                                  <small>
-                                    {p.nflTeam}
-                                    <span>·</span>
-                                    {p.position}
-                                    {metric === 'ros' && (
-                                      <span className="source-label">
-                                        {p.projectionSource === 'estimate'
-                                          ? 'EST.'
-                                          : p.projectionSource === 'custom'
-                                            ? 'CUSTOM'
-                                            : p.projectionSource === 'sample'
-                                              ? 'SAMPLE'
-                                              : ''}
-                                      </span>
-                                    )}
-                                  </small>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="status-col">
-                              {['ACTIVE', 'NORMAL'].includes(p.status) ? (
-                                <span className="player-status healthy">
-                                  <span />
-                                  Healthy
-                                </span>
-                              ) : (
-                                <span className="player-status injury">
-                                  {p.status === 'QUESTIONABLE'
-                                    ? 'Questionable'
-                                    : p.status
-                                        .replaceAll('_', ' ')
-                                        .toLowerCase()}
-                                </span>
-                              )}
-                            </td>
-                            <td className="number projection-number">
-                              {points(p[metric])}
-                            </td>
-                            <td className="number season-col muted-number">
-                              {points(p.actual)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {!displayed.length && (
-                      <div className="empty-state">
-                        <Search size={25} />
-                        <strong>No players found</strong>
-                        <p>Try another name or position.</p>
-                        <button
-                          className="button secondary"
-                          onClick={() => {
-                            setQuery('');
-                            setPosition('All');
-                            setRosterFilter('All players');
-                          }}
-                        >
-                          Clear filters
-                        </button>
-                      </div>
+              <TeamForecast team={team} league={league} forecast={forecast} />
+              <div
+                className="team-tabs"
+                role="tablist"
+                aria-label="Team overview sections"
+              >
+                {(['overview', 'schedule'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    role="tab"
+                    id={`team-${tab}-tab`}
+                    aria-selected={teamTab === tab}
+                    aria-controls={`team-${tab}-panel`}
+                    tabIndex={teamTab === tab ? 0 : -1}
+                    onKeyDown={(event) => {
+                      if (
+                        ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(
+                          event.key,
+                        )
+                      ) {
+                        event.preventDefault();
+                        const next =
+                          event.key === 'Home'
+                            ? 'overview'
+                            : event.key === 'End'
+                              ? 'schedule'
+                              : teamTab === 'overview'
+                                ? 'schedule'
+                                : 'overview';
+                        setTeamTab(next);
+                        document.getElementById(`team-${next}-tab`)?.focus();
+                      }
+                    }}
+                    onClick={() => setTeamTab(tab)}
+                  >
+                    {tab === 'overview' ? (
+                      <LayoutDashboard size={16} />
+                    ) : (
+                      <CalendarDays size={16} />
                     )}
-                  </div>
-                  <div className="table-footer">
-                    <span>
-                      <span className="live-dot" />
-                      {projectionDescription}
-                    </span>
-                    <span>
-                      {displayed.length} players · {coverage}/{starters.length}{' '}
-                      starters projected
-                    </span>
-                  </div>
-                </section>
-                <aside className="insight-column">
-                  <section className="panel position-panel">
+                    {tab === 'overview' ? 'Overview' : 'Schedule'}
+                  </button>
+                ))}
+              </div>
+              {teamTab === 'schedule' && (
+                <TeamSchedule team={team} league={league} forecast={forecast} />
+              )}
+              <div
+                id="team-overview-panel"
+                role="tabpanel"
+                aria-labelledby="team-overview-tab"
+                hidden={teamTab !== 'overview'}
+              >
+                <div className="roster-layout">
+                  <section className="panel roster-panel">
                     <div className="panel-heading">
                       <div>
-                        <h3>Where the points are</h3>
-                        <p>
-                          {metric === 'weekly' ? 'Weekly' : 'ROS'} starter
-                          projections by position.
-                        </p>
+                        <h3>
+                          The lineup
+                          <span className="count-chip">
+                            {team.players.length}
+                          </span>
+                        </h3>
+                        <p>A closer look at your roster.</p>
                       </div>
-                      <span className="icon-tile">
-                        <Layers3 size={17} />
-                      </span>
-                    </div>
-                    <PositionChart players={starters} metric={metric} />
-                    <div className="chart-legend">
-                      <span>
-                        <span className="legend-square" />
-                        Projected starter points
-                      </span>
-                      <strong>{points(total(starters, metric))}</strong>
-                    </div>
-                  </section>
-                  <section className="panel depth-panel">
-                    <div className="panel-heading">
-                      <div>
-                        <h3>Your roster, at a glance</h3>
-                        <p>Every piece of the puzzle.</p>
+                      <div className="segmented" aria-label="Projection period">
+                        <button
+                          className={metric === 'weekly' ? 'current' : ''}
+                          onClick={() => setMetric('weekly')}
+                        >
+                          This week
+                        </button>
+                        <button
+                          className={metric === 'ros' ? 'current' : ''}
+                          onClick={() => setMetric('ros')}
+                        >
+                          Rest of season
+                        </button>
                       </div>
                     </div>
-                    <div className="depth-stats">
-                      <div>
-                        <strong>{starters.length}</strong>
-                        <span>Starters</span>
-                      </div>
-                      <div>
-                        <strong>
-                          {team.players.filter((p) => p.slotId === 20).length}
-                        </strong>
-                        <span>Bench</span>
-                      </div>
-                      <div>
-                        <strong>
-                          {team.players.filter((p) => p.slotId === 21).length}
-                        </strong>
-                        <span>IR</span>
-                      </div>
-                    </div>
-                    <div className="depth-track">
-                      {team.players.map((p) => (
-                        <span
-                          key={p.id}
-                          className={
-                            active(p)
-                              ? 'starter'
-                              : p.slotId === 21
-                                ? 'ir'
-                                : 'bench'
-                          }
-                          title={`${p.name} · ${p.slot}`}
+                    <div className="table-toolbar">
+                      <div className="search-field">
+                        <Search size={15} />
+                        <input
+                          aria-label="Search players"
+                          placeholder="Search players..."
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
                         />
+                        {query && (
+                          <button
+                            aria-label="Clear search"
+                            onClick={() => setQuery('')}
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                      <select
+                        aria-label="Roster filter"
+                        value={rosterFilter}
+                        onChange={(e) => setRosterFilter(e.target.value)}
+                      >
+                        <option>All players</option>
+                        <option>Starters</option>
+                        <option>Bench & IR</option>
+                      </select>
+                      <button
+                        className="icon-button export-button"
+                        aria-label="Export roster CSV"
+                        title="Export roster CSV"
+                        onClick={exportRoster}
+                      >
+                        <Download size={17} />
+                      </button>
+                    </div>
+                    <div className="position-tabs" aria-label="Position filter">
+                      {['All', ...positions].map((p) => (
+                        <button
+                          key={p}
+                          className={position === p ? 'active' : ''}
+                          onClick={() => setPosition(p)}
+                        >
+                          {p}
+                        </button>
                       ))}
                     </div>
-                    <div className="injury-note">
-                      {team.players.some(
-                        (p) => !['ACTIVE', 'NORMAL'].includes(p.status),
-                      ) ? (
-                        <>
-                          <Activity size={15} />
-                          {
-                            team.players.filter(
-                              (p) => !['ACTIVE', 'NORMAL'].includes(p.status),
-                            ).length
-                          }{' '}
-                          player(s) with a status to watch
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 size={15} />
-                          No injury flags on your roster
-                        </>
+                    <div className="table-scroll">
+                      <table className="roster-table">
+                        <thead>
+                          <tr>
+                            <th>SLOT</th>
+                            <th>
+                              <button
+                                onClick={() =>
+                                  setSort(sort === 'name' ? 'lineup' : 'name')
+                                }
+                              >
+                                PLAYER
+                                <ArrowDownUp size={11} />
+                              </button>
+                            </th>
+                            <th className="status-col">STATUS</th>
+                            <th className="number">
+                              <button
+                                onClick={() =>
+                                  setSort(
+                                    sort === 'projection'
+                                      ? 'lineup'
+                                      : 'projection',
+                                  )
+                                }
+                              >
+                                {metric === 'weekly'
+                                  ? 'WK ' + league.week + ' PROJ.'
+                                  : 'ROS PROJ.'}
+                                <ArrowDownUp size={11} />
+                              </button>
+                            </th>
+                            <th className="number season-col">SEASON PTS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {displayed.map((p) => (
+                            <tr
+                              key={p.id}
+                              className={!active(p) ? 'bench-row' : ''}
+                            >
+                              <td>
+                                <span
+                                  className={`slot-badge ${active(p) ? '' : 'bench'}`}
+                                >
+                                  {p.slot}
+                                </span>
+                              </td>
+                              <td>
+                                <div className="player-cell">
+                                  <Avatar player={p} />
+                                  <div>
+                                    <strong>{p.name}</strong>
+                                    <small>
+                                      {p.nflTeam}
+                                      <span>·</span>
+                                      {p.position}
+                                      {metric === 'ros' && (
+                                        <span className="source-label">
+                                          {p.projectionSource === 'estimate'
+                                            ? 'EST.'
+                                            : p.projectionSource === 'custom'
+                                              ? 'CUSTOM'
+                                              : p.projectionSource === 'sample'
+                                                ? 'SAMPLE'
+                                                : ''}
+                                        </span>
+                                      )}
+                                    </small>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="status-col">
+                                {['ACTIVE', 'NORMAL'].includes(p.status) ? (
+                                  <span className="player-status healthy">
+                                    <span />
+                                    Healthy
+                                  </span>
+                                ) : (
+                                  <span className="player-status injury">
+                                    {p.status === 'QUESTIONABLE'
+                                      ? 'Questionable'
+                                      : p.status
+                                          .replaceAll('_', ' ')
+                                          .toLowerCase()}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="number projection-number">
+                                {points(p[metric])}
+                              </td>
+                              <td className="number season-col muted-number">
+                                {points(p.actual)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {!displayed.length && (
+                        <div className="empty-state">
+                          <Search size={25} />
+                          <strong>No players found</strong>
+                          <p>Try another name or position.</p>
+                          <button
+                            className="button secondary"
+                            onClick={() => {
+                              setQuery('');
+                              setPosition('All');
+                              setRosterFilter('All players');
+                            }}
+                          >
+                            Clear filters
+                          </button>
+                        </div>
                       )}
                     </div>
+                    <div className="table-footer">
+                      <span>
+                        <span className="live-dot" />
+                        {projectionDescription}
+                      </span>
+                      <span>
+                        {displayed.length} players · {coverage}/
+                        {starters.length} starters projected
+                      </span>
+                    </div>
                   </section>
-                  <section className="trade-promo">
-                    <span className="promo-icon">
-                      <ArrowLeftRight size={21} />
-                    </span>
-                    <span className="beta">TRADE LAB</span>
-                    <h3>
-                      A better roster starts
-                      <br />
-                      with a good question.
-                    </h3>
-                    <p>
-                      See how a potential trade changes your projected starting
-                      lineup.
-                    </p>
-                    <button onClick={() => navigate('trade')}>
-                      Explore a trade
-                      <ArrowUpRight size={17} />
-                    </button>
-                    <div className="promo-decoration" />
-                  </section>
-                </aside>
+                  <aside className="insight-column">
+                    <section className="panel position-panel">
+                      <div className="panel-heading">
+                        <div>
+                          <h3>Where the points are</h3>
+                          <p>
+                            {metric === 'weekly' ? 'Weekly' : 'ROS'} starter
+                            projections by position.
+                          </p>
+                        </div>
+                        <span className="icon-tile">
+                          <Layers3 size={17} />
+                        </span>
+                      </div>
+                      <PositionChart players={starters} metric={metric} />
+                      <div className="chart-legend">
+                        <span>
+                          <span className="legend-square" />
+                          Projected starter points
+                        </span>
+                        <strong>{points(total(starters, metric))}</strong>
+                      </div>
+                    </section>
+                    <section className="panel depth-panel">
+                      <div className="panel-heading">
+                        <div>
+                          <h3>Your roster, at a glance</h3>
+                          <p>Every piece of the puzzle.</p>
+                        </div>
+                      </div>
+                      <div className="depth-stats">
+                        <div>
+                          <strong>{starters.length}</strong>
+                          <span>Starters</span>
+                        </div>
+                        <div>
+                          <strong>
+                            {team.players.filter((p) => p.slotId === 20).length}
+                          </strong>
+                          <span>Bench</span>
+                        </div>
+                        <div>
+                          <strong>
+                            {team.players.filter((p) => p.slotId === 21).length}
+                          </strong>
+                          <span>IR</span>
+                        </div>
+                      </div>
+                      <div className="depth-track">
+                        {team.players.map((p) => (
+                          <span
+                            key={p.id}
+                            className={
+                              active(p)
+                                ? 'starter'
+                                : p.slotId === 21
+                                  ? 'ir'
+                                  : 'bench'
+                            }
+                            title={`${p.name} · ${p.slot}`}
+                          />
+                        ))}
+                      </div>
+                      <div className="injury-note">
+                        {team.players.some(
+                          (p) => !['ACTIVE', 'NORMAL'].includes(p.status),
+                        ) ? (
+                          <>
+                            <Activity size={15} />
+                            {
+                              team.players.filter(
+                                (p) => !['ACTIVE', 'NORMAL'].includes(p.status),
+                              ).length
+                            }{' '}
+                            player(s) with a status to watch
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 size={15} />
+                            No injury flags on your roster
+                          </>
+                        )}
+                      </div>
+                    </section>
+                    <section className="trade-promo">
+                      <span className="promo-icon">
+                        <ArrowLeftRight size={21} />
+                      </span>
+                      <span className="beta">TRADE LAB</span>
+                      <h3>
+                        A better roster starts
+                        <br />
+                        with a good question.
+                      </h3>
+                      <p>
+                        See how a potential trade changes your projected
+                        starting lineup.
+                      </p>
+                      <button onClick={() => navigate('trade')}>
+                        Explore a trade
+                        <ArrowUpRight size={17} />
+                      </button>
+                      <div className="promo-decoration" />
+                    </section>
+                  </aside>
+                </div>
               </div>
             </>
           )}
@@ -1355,6 +1409,7 @@ export default function Dashboard() {
                 <span className="count-chip">{league.teams.length} teams</span>
               </div>
               <LeagueTable
+                forecast={forecast}
                 teams={rankings}
                 myTeamId={myTeamId}
                 league={league}
@@ -2161,26 +2216,8 @@ function TradePicker({
   );
 }
 
-type LeagueSort =
-  | 'rank'
-  | 'team'
-  | 'record'
-  | 'weekly'
-  | 'ros'
-  | 'expected'
-  | 'playoffs'
-  | 'championship';
-function LeagueTable({
-  teams,
-  myTeamId,
-  league,
-  onView,
-}: {
-  teams: Team[];
-  myTeamId: number;
-  league: League;
-  onView: (id: number) => void;
-}) {
+type ForecastState = { result?: SeasonForecast; error?: string } | undefined;
+function useSeasonForecast(league: League): ForecastState {
   const [forecastState, setForecastState] = useState<{
     league: League;
     result?: SeasonForecast;
@@ -2208,6 +2245,245 @@ function LeagueTable({
     return () => worker.terminate();
   }, [league]);
   const forecast = forecastState?.league === league ? forecastState : undefined;
+  return forecast;
+}
+const forecastChance = (value: number | undefined) =>
+  value === undefined ? '—' : `${(value * 100).toFixed(1)}%`;
+
+function TeamForecast({
+  team,
+  league,
+  forecast,
+}: {
+  team: Team;
+  league: League;
+  forecast: ForecastState;
+}) {
+  const projection = forecast?.result?.teams.find((t) => t.id === team.id);
+  return (
+    <section
+      className="panel team-forecast"
+      aria-label="Team season projections"
+    >
+      <div className="panel-heading">
+        <div>
+          <h3>The season ahead</h3>
+          <p>Your expected finish, using the standings forecast.</p>
+        </div>
+        <TrendingUp size={20} />
+      </div>
+      <div className="team-forecast-grid">
+        <StatCard
+          label="EXPECTED W–L"
+          value={
+            projection
+              ? `${points(projection.wins)}–${points(projection.losses)}`
+              : '—'
+          }
+          icon={<Shield size={17} />}
+          detail={
+            <>
+              Regular season · through Week{' '}
+              {(league.playoffStartWeek ?? league.finalWeek + 1) - 1}
+              {!!projection?.ties && ` · ${points(projection.ties)} ties`}
+            </>
+          }
+        />
+        <StatCard
+          label="MAKE PLAYOFFS"
+          value={forecastChance(projection?.playoffs)}
+          icon={<TrendingUp size={17} />}
+          detail="Chance to qualify"
+        />
+        <StatCard
+          label="WIN CHAMPIONSHIP"
+          value={forecastChance(projection?.championship)}
+          icon={<Trophy size={17} />}
+          detail="Chance to win the league"
+        />
+      </div>
+      <details className="league-forecast-details">
+        <summary>Season forecast model</summary>
+        <p>
+          {forecast?.result?.description ??
+            forecast?.error ??
+            'Calculating season forecasts…'}
+        </p>
+      </details>
+    </section>
+  );
+}
+
+function TeamSchedule({
+  team,
+  league,
+  forecast,
+}: {
+  team: Team;
+  league: League;
+  forecast: ForecastState;
+}) {
+  const matchups =
+    forecast?.result?.matchups
+      .filter((m) => m.homeId === team.id || m.awayId === team.id)
+      .sort((a, b) => Math.min(...a.weeks) - Math.min(...b.weeks)) ?? [];
+  const label = (weeks: number[]) =>
+    weeks.length === 1
+      ? `Week ${weeks[0]}`
+      : `Weeks ${[...weeks].sort((a, b) => a - b).join(', ')}`;
+  return (
+    <section
+      id="team-schedule-panel"
+      role="tabpanel"
+      aria-labelledby="team-schedule-tab"
+      className="panel team-schedule"
+    >
+      <div className="panel-heading">
+        <div>
+          <h3>The road ahead</h3>
+          <p>
+            Rest-of-season matchups for {team.name} · includes the current week.
+          </p>
+        </div>
+        <CalendarDays size={20} />
+      </div>
+      {matchups.length > 0 ? (
+        <div
+          className="league-table-scroll"
+          role="region"
+          aria-label="Team schedule; scroll horizontally on small screens"
+          tabIndex={0}
+        >
+          <table className="league-table schedule-table">
+            <thead>
+              <tr>
+                <th scope="col">Matchup</th>
+                <th scope="col">Opponent</th>
+                <th scope="col" className="number">
+                  Team proj.
+                </th>
+                <th scope="col" className="number">
+                  Opponent proj.
+                </th>
+                <th scope="col" className="number">
+                  Chance to win
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {matchups.map((m) => {
+                const home = m.homeId === team.id;
+                const opponent = league.teams.find(
+                  (t) => t.id === (home ? m.awayId : m.homeId),
+                )!;
+                const chance = home ? m.homeWinChance : m.awayWinChance;
+                return (
+                  <tr key={m.id}>
+                    <td>
+                      <strong>{label(m.weeks)}</strong>
+                      {m.weeks.includes(league.week) && (
+                        <span className="league-cell-detail">This week</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="league-table-team">
+                        <TeamMark team={opponent} small />
+                        <div>
+                          <span className="league-table-name">
+                            {opponent.name}
+                          </span>
+                          <span className="league-cell-detail">
+                            {opponent.wins}–{opponent.losses}
+                            {m.missing
+                              ? ' · Missing forecasts'
+                              : m.estimated
+                                ? ' · Includes estimates'
+                                : ''}
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="number league-table-projection">
+                      {points(home ? m.homePoints : m.awayPoints)}
+                    </td>
+                    <td className="number">
+                      {points(home ? m.awayPoints : m.homePoints)}
+                    </td>
+                    <td className="number">
+                      <strong>{forecastChance(chance)}</strong>
+                      <span className="win-chance-track" aria-hidden="true">
+                        <span style={{ width: `${chance * 100}%` }} />
+                      </span>
+                      {m.tieChance > 0 && (
+                        <span className="league-cell-detail">
+                          {forecastChance(m.tieChance)} tie
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="schedule-empty" role="status">
+          {forecast?.error ??
+            (forecast?.result
+              ? 'No remaining confirmed matchups.'
+              : 'Calculating matchup projections…')}
+        </p>
+      )}
+      {league.playoffStartWeek &&
+        league.finalWeek >= Math.max(league.week, league.playoffStartWeek) && (
+          <div className="schedule-postseason">
+            <Trophy size={18} />
+            <div>
+              <strong>
+                Playoffs · Weeks{' '}
+                {Math.max(league.week, league.playoffStartWeek)}–
+                {league.finalWeek}
+              </strong>
+              <p>
+                Opponents depend on qualification and seeding. Matchup
+                projections and win chances are unavailable until the bracket is
+                decided.
+              </p>
+            </div>
+          </div>
+        )}
+      <div className="league-table-footer">
+        <span>
+          Scores and win chances use the same simulations as the standings.
+          Multi-week scores are combined.
+        </span>
+      </div>
+    </section>
+  );
+}
+
+type LeagueSort =
+  | 'rank'
+  | 'team'
+  | 'record'
+  | 'weekly'
+  | 'ros'
+  | 'expected'
+  | 'playoffs'
+  | 'championship';
+function LeagueTable({
+  teams,
+  myTeamId,
+  league,
+  onView,
+  forecast,
+}: {
+  forecast: ForecastState;
+  teams: Team[];
+  myTeamId: number;
+  league: League;
+  onView: (id: number) => void;
+}) {
   const forecasts = new Map(
     forecast?.result?.teams.map((team) => [team.id, team]),
   );

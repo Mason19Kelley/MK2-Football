@@ -4,6 +4,7 @@ import { demoLeague } from '../lib/demo';
 import { League, Player } from '../lib/types';
 import { planTrade } from '../lib/trade-plans';
 import { findTrades } from '../lib/trade-finder';
+import { optimalLineup } from '../lib/trades';
 
 function p(id: number, ros: number, slot: number): Player {
   return {
@@ -118,6 +119,44 @@ test('imported empty roster spots avoid unnecessary drops in unequal trades', ()
   assert.equal(plan.partner.roster.length, 4);
   assert.equal(plan.partner.capacitySource, 'league');
   assert.equal(plan.mine.capacitySource, 'snapshot');
+});
+
+test('limited and Pareto results retain independently evaluated pickup-free gains', async () => {
+  const l = league();
+  for (const paretoOnly of [false, true]) {
+    const options = {
+      maxPlayers: 2 as const,
+      allSizes: true,
+      includePickup: true,
+      minimumGain: 0,
+      ranking: 'mine' as const,
+      paretoOnly,
+    };
+    const exhaustive = await findTrades(l, 1, { ...options, limit: 100 });
+    const limited = await findTrades(l, 1, { ...options, limit: 1 });
+    assert.ok(exhaustive.matched > 1);
+    assert.equal(limited.matched, exhaustive.matched);
+    assert.deepEqual(limited.candidates, exhaustive.candidates.slice(0, 1));
+    for (const candidate of exhaustive.candidates) {
+      const noPickup = planTrade(
+        l,
+        l.teams[0].players,
+        l.teams[1].players,
+        candidate.send.map((p) => p.id),
+        candidate.receive.map((p) => p.id),
+        { includePickup: false },
+      );
+      assert.deepEqual(candidate.tradeOnly, {
+        mine:
+          optimalLineup(noPickup.mine.roster, l.slots).total -
+          (candidate.mine.before.upperTotal ?? candidate.mine.before.total),
+        partner:
+          optimalLineup(noPickup.partner.roster, l.slots).total -
+          (candidate.partner.before.upperTotal ??
+            candidate.partner.before.total),
+      });
+    }
+  }
 });
 
 test('finder skips packages without a valid drop instead of failing the entire search', async () => {

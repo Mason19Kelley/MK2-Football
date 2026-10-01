@@ -49,14 +49,16 @@ export function optimalLineup(
       let changed = false;
       for (let u = 0; u < n; u++) {
         if (!Number.isFinite(dist[u])) continue;
-        graph[u].forEach((e, ei) => {
+        const edges = graph[u];
+        for (let ei = 0; ei < edges.length; ei++) {
+          const e = edges[ei];
           if (e.cap && dist[u] + e.cost < dist[e.to] - 1e-8) {
             dist[e.to] = dist[u] + e.cost;
             prevNode[e.to] = u;
             prevEdge[e.to] = ei;
             changed = true;
           }
-        });
+        }
       }
       if (!changed) break;
     }

@@ -483,19 +483,19 @@ export async function findTrades(
     ): TradeCandidate => {
       const after = evaluate(plan.mine.roster),
         partnerAfter = evaluatePartner(plan.partner.roster);
-      const all = new Map(currentEvaluations);
-      all.set(myTeamId, after);
-      all.set(partner.id, partnerAfter);
-      const outcomes =
-        objective === 'points'
-          ? undefined
-          : evaluateLeagueOutcomes(
-              league,
-              all,
-              horizon,
-              objective,
-              options.playoffs,
-            );
+      let outcomes: Map<number, OutcomeSummary> | undefined;
+      if (objective !== 'points') {
+        const all = new Map(currentEvaluations);
+        all.set(myTeamId, after);
+        all.set(partner.id, partnerAfter);
+        outcomes = evaluateLeagueOutcomes(
+          league,
+          all,
+          horizon,
+          objective,
+          options.playoffs,
+        );
+      }
       return {
         partnerId: partner.id,
         send,
@@ -602,22 +602,6 @@ export async function findTrades(
                 projected(candidate.mine.after) &&
                 projected(candidate.partner.after))
             ) {
-              const noPickup = planTrade(
-                league,
-                mine.players,
-                partner.players,
-                send.map((p) => p.id),
-                receive.map((p) => p.id),
-                { evaluate, evaluatePartner, includePickup: false },
-              );
-              candidate.tradeOnly = {
-                mine:
-                  evaluate(noPickup.mine.roster).total -
-                  (before.upperTotal ?? before.total),
-                partner:
-                  evaluatePartner(noPickup.partner.roster).total -
-                  (partnerBefore.upperTotal ?? partnerBefore.total),
-              };
               matched++;
               if (options.paretoOnly) {
                 const frontier = frontiers.get(partner.id) ?? [];
@@ -642,7 +626,7 @@ export async function findTrades(
               throw err;
             unplannable++;
           }
-          if (checked % 25 === 0 || Date.now() - yieldedAt >= 25) {
+          if (Date.now() - yieldedAt >= 25) {
             options.onProgress?.(checked, { phase, evaluatedRosters });
             await new Promise<void>((resolve) => setTimeout(resolve, 0));
             yieldedAt = Date.now();
@@ -660,6 +644,30 @@ export async function findTrades(
         .sort((a, b) => rankTrades(a, b, options.ranking))
         .slice(0, limit),
     );
+  // Pickup-free gains are display details, not part of ranking or filtering.
+  // Only compute them for offers that survive the frontier and result limit.
+  for (const candidate of candidates) {
+    abort();
+    const partner = league.teams.find((t) => t.id === candidate.partnerId)!;
+    const evaluatePartner = (players: Player[]) =>
+      evaluate(players, options.partnerHorizon ?? horizon);
+    const noPickup = planTrade(
+      league,
+      mine.players,
+      partner.players,
+      candidate.send.map((p) => p.id),
+      candidate.receive.map((p) => p.id),
+      { evaluate, evaluatePartner, includePickup: false },
+    );
+    candidate.tradeOnly = {
+      mine:
+        evaluate(noPickup.mine.roster).total -
+        (candidate.mine.before.upperTotal ?? candidate.mine.before.total),
+      partner:
+        evaluatePartner(noPickup.partner.roster).total -
+        (candidate.partner.before.upperTotal ?? candidate.partner.before.total),
+    };
+  }
   const warnings: string[] = [];
   if (waiverBaseline)
     warnings.push(

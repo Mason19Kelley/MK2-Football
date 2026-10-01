@@ -18,6 +18,19 @@ export type SeasonForecast = {
     playoffs?: number;
     championship?: number;
   }[];
+  matchups: {
+    id: number;
+    weeks: number[];
+    homeId: number;
+    awayId: number;
+    homePoints: number;
+    awayPoints: number;
+    homeWinChance: number;
+    awayWinChance: number;
+    tieChance: number;
+    estimated: boolean;
+    missing: boolean;
+  }[];
   samples: number;
   description: string;
 };
@@ -80,6 +93,39 @@ export function forecastSeason(league: League): SeasonForecast {
         championship: outcome.title,
       };
     }),
+    matchups: (league.matchups ?? [])
+      .filter((m) =>
+        m.weeks.every((w) => w >= league.week && w < league.playoffStartWeek!),
+      )
+      .map((m) => {
+        const home = evaluations.get(m.homeId)!;
+        const away = evaluations.get(m.awayId)!;
+        const scores = (evaluation: typeof home) =>
+          Array.from({ length: scenarios.samples }, (_, i) =>
+            m.weeks.reduce(
+              (sum, week) => sum + evaluation.scenarioWeeks![week][i],
+              0,
+            ),
+          );
+        const homeScores = scores(home);
+        const awayScores = scores(away);
+        const chance = (compare: (a: number, b: number) => boolean) =>
+          homeScores.filter((score, i) => compare(score, awayScores[i]))
+            .length / scenarios.samples;
+        const weeks = [...home.weeks, ...away.weeks].filter((w) =>
+          m.weeks.includes(w.week),
+        );
+        return {
+          ...m,
+          homePoints: homeScores.reduce((a, b) => a + b, 0) / scenarios.samples,
+          awayPoints: awayScores.reduce((a, b) => a + b, 0) / scenarios.samples,
+          homeWinChance: chance((a, b) => a > b),
+          awayWinChance: chance((a, b) => b > a),
+          tieChance: chance((a, b) => a === b),
+          estimated: weeks.some((w) => w.estimated > 0),
+          missing: weeks.some((w) => w.missing > 0),
+        };
+      }),
     samples: scenarios.samples,
     description: [
       `${scenarios.samples} season simulations · Expected record through Week ${league.playoffStartWeek - 1}.`,

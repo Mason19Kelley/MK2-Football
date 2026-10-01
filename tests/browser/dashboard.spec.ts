@@ -7,7 +7,7 @@ test('rosters filter, switch projection periods, and browse other teams', async 
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
   await expect(
-    page.getByRole('heading', { name: 'My roster', exact: true }),
+    page.getByRole('heading', { name: 'Team overview', exact: true }),
   ).toBeVisible();
   await page.getByRole('textbox', { name: 'Search players' }).fill('Josh');
   await expect(page.locator('tbody tr')).toHaveCount(1);
@@ -585,8 +585,12 @@ test('two-for-one plans and optional pickups survive review and period changes',
     exact: true,
   });
   await finder.getByLabel('Trade size').selectOption('unequal');
-  await finder.getByText('Evaluation assumptions and forecast overrides').click();
-  await expect(finder.getByLabel(/Compare against each team's best no-trade/)).toBeChecked();
+  await finder
+    .getByText('Evaluation assumptions and forecast overrides')
+    .click();
+  await expect(
+    finder.getByLabel(/Compare against each team's best no-trade/),
+  ).toBeChecked();
   await finder
     .getByRole('button', { name: 'Find trades', exact: true })
     .click();

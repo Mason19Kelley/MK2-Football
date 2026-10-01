@@ -117,3 +117,29 @@ test('ESPN normalization imports playoff qualification and round length settings
   assert.equal(league.playoffTeamCount, 6);
   assert.equal(league.playoffRoundWeeks, 2);
 });
+
+test('matchup scores and win chances reconcile with season records', () => {
+  const league = fixture();
+  const result = forecastSeason(league);
+  assert.equal(result.matchups.length, 2);
+  for (const matchup of result.matchups) {
+    assert.equal(
+      matchup.homeWinChance + matchup.awayWinChance + matchup.tieChance,
+      1,
+    );
+    assert.ok(
+      Number.isFinite(matchup.homePoints) &&
+        Number.isFinite(matchup.awayPoints),
+    );
+    for (const home of [true, false]) {
+      const id = home ? matchup.homeId : matchup.awayId;
+      const before = league.teams.find((t) => t.id === id)!;
+      const after = result.teams.find((t) => t.id === id)!;
+      assert.equal(
+        after.wins - before.wins,
+        home ? matchup.homeWinChance : matchup.awayWinChance,
+      );
+      assert.equal(after.ties - before.ties, matchup.tieChance);
+    }
+  }
+});
